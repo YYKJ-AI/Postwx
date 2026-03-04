@@ -340,6 +340,33 @@ async function uploadImage(
     contentType = mimeTypes[ext] || "image/jpeg";
   }
 
+  // 检测 webp 魔术字节并转换为 PNG（微信 API 不支持 webp）
+  if (
+    fileBuffer.length >= 12 &&
+    fileBuffer.slice(0, 4).toString("ascii") === "RIFF" &&
+    fileBuffer.slice(8, 12).toString("ascii") === "WEBP"
+  ) {
+    console.error("[wechat-api] Detected WebP image, converting to PNG...");
+    const tmpWebp = path.join(os.tmpdir(), `postwx-${Date.now()}.webp`);
+    const tmpPng = tmpWebp.replace(/\.webp$/, ".png");
+    fs.writeFileSync(tmpWebp, fileBuffer);
+    const sipsResult = spawnSync(
+      "sips",
+      ["-s", "format", "png", tmpWebp, "--out", tmpPng],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    if (sipsResult.status !== 0) {
+      throw new Error(
+        `WebP to PNG conversion failed: ${sipsResult.stderr?.toString()}`,
+      );
+    }
+    fileBuffer = fs.readFileSync(tmpPng);
+    filename = filename.replace(/\.webp$/i, ".png");
+    contentType = "image/png";
+  }
+
   const boundary = `----WebKitFormBoundary${Date.now().toString(16)}`;
   const header = [
     `--${boundary}`,
@@ -736,10 +763,28 @@ async function main(): Promise<void> {
         frontmatter.description ||
         "";
 
+    // 预处理: 将 ![alt](__generate:prompt__) 转为 HTML img 标签，防止 __ 被渲染为粗体
+    const generateImgRegex = /!\[([^\]]*)\]\(__generate:(.+?)__\)/g;
+    let renderFilePath = filePath;
+    if (generateImgRegex.test(body)) {
+      const preprocessed = body.replace(
+        /!\[([^\]]*)\]\(__generate:(.+?)__\)/g,
+        '<img src="__generate:$2__" alt="$1">',
+      );
+      const tmpDir = os.tmpdir();
+      const tmpFile = path.join(tmpDir, `postwx-${Date.now()}.md`);
+      // 保留 frontmatter + 替换后的 body
+      const originalContent = fs.readFileSync(filePath, "utf-8");
+      const fmMatch = originalContent.match(/^(---\r?\n[\s\S]*?\r?\n---\r?\n)/);
+      const fmPart = fmMatch ? fmMatch[1] : "";
+      fs.writeFileSync(tmpFile, fmPart + preprocessed, "utf-8");
+      renderFilePath = tmpFile;
+    }
+
     console.error(
       `[wechat-api] Theme: ${args.theme}${args.color ? `, color: ${args.color}` : ""}`,
     );
-    htmlPath = renderMarkdownToHtml(filePath, args.theme, args.color);
+    htmlPath = renderMarkdownToHtml(renderFilePath, args.theme, args.color);
     console.error(`[wechat-api] HTML generated: ${htmlPath}`);
     htmlContent = extractHtmlContent(htmlPath);
   }
@@ -816,7 +861,30 @@ async function main(): Promise<void> {
       ? path.resolve(process.cwd(), rawCoverPath)
       : rawCoverPath;
 
-  if (coverPath) {
+  if (
+    coverPath &&
+    coverPath.startsWith("__generate:") &&
+    coverPath.endsWith("__")
+  ) {
+    // AI 生成封面图
+    const imageGenConfig = loadImageGenConfig();
+    if (!imageGenConfig) {
+      console.error(
+        "Error: --cover uses __generate: but IMAGE_API_KEY not configured.",
+      );
+      process.exit(1);
+    }
+    const prompt = coverPath.slice("__generate:".length, -2);
+    console.error(
+      `[wechat-api] Generating cover image: ${prompt.slice(0, 80)}...`,
+    );
+    const imageBuffer = await generateImage(prompt, imageGenConfig);
+    const tmpCover = path.join(os.tmpdir(), `postwx-cover-${Date.now()}.png`);
+    fs.writeFileSync(tmpCover, imageBuffer);
+    console.error(`[wechat-api] Uploading generated cover: ${tmpCover}`);
+    const coverResp = await uploadImage(tmpCover, accessToken, baseDir);
+    thumbMediaId = coverResp.media_id;
+  } else if (coverPath) {
     console.error(`[wechat-api] Uploading cover: ${coverPath}`);
     const coverResp = await uploadImage(coverPath, accessToken, baseDir);
     thumbMediaId = coverResp.media_id;
