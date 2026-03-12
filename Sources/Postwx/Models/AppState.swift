@@ -18,13 +18,19 @@ final class AppState {
 
     var wechatAppId: String = ""
     var wechatAppSecret: String = ""
+    var imageApiBase: String = ""
     var imageApiKey: String = ""
+    var imageModel: String = ""
+    var claudeApiBase: String = ""
+    var claudeApiKey: String = ""
+    var claudeModel: String = ""
 
     // MARK: - Preferences
 
     var creatorRole: CreatorRole = .techBlogger
     var writingStyle: WritingStyle = .professional
     var targetAudience: TargetAudience = .general
+    var username: String = ""
     var defaultAuthor: String = ""
     var needOpenComment: Bool = true
     var onlyFansCanComment: Bool = false

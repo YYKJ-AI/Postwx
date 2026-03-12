@@ -4,9 +4,15 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     var state: AppState?
 
+    @AppStorage("username") private var username = ""
     @AppStorage("wechatAppId") private var appId = ""
     @AppStorage("wechatAppSecret") private var appSecret = ""
+    @AppStorage("imageApiBase") private var imageApiBase = ""
     @AppStorage("imageApiKey") private var imageApiKey = ""
+    @AppStorage("imageModel") private var imageModel = ""
+    @AppStorage("claudeApiBase") private var claudeApiBase = ""
+    @AppStorage("claudeApiKey") private var claudeApiKey = ""
+    @AppStorage("claudeModel") private var claudeModel = ""
     @AppStorage("creatorRole") private var creatorRole = "tech-blogger"
     @AppStorage("writingStyle") private var writingStyle = "professional"
     @AppStorage("targetAudience") private var targetAudience = "general"
@@ -15,6 +21,9 @@ struct SettingsView: View {
     @AppStorage("onlyFansCanComment") private var onlyFansCanComment = false
 
     @State private var selectedTab = 0
+    @State private var wechatTestState: TestState = .idle
+    @State private var imageTestState: TestState = .idle
+    @State private var claudeTestState: TestState = .idle
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,7 +68,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .frame(width: 400, height: 360)
+        .frame(width: 420, height: 580)
         .onDisappear { syncToState() }
     }
 
@@ -68,23 +77,75 @@ struct SettingsView: View {
     private var credentialsTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                // 用户信息
+                sectionHeader("用户信息")
+                settingsTextField("用户名", text: $username)
+
+                Divider()
+
                 // 微信公众号
                 sectionHeader("微信公众号")
 
                 VStack(spacing: 10) {
                     settingsTextField("App ID", text: $appId)
-                    settingsTextField("App Secret", text: $appSecret)
+                    settingsSecureField("App Secret", text: $appSecret)
                 }
+
+                testButton(
+                    state: wechatTestState,
+                    label: "测试连接",
+                    disabled: appId.isEmpty || appSecret.isEmpty
+                ) {
+                    testWechat()
+                }
+
+                Divider()
 
                 // AI 配图
                 sectionHeader("AI 配图（可选）")
 
-                VStack(spacing: 6) {
-                    settingsTextField("Image API Key", text: $imageApiKey)
-                    Text("用于 AI 自动生成封面和插图")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                VStack(spacing: 10) {
+                    settingsTextField("API Base URL", text: $imageApiBase, placeholder: "https://api.tu-zi.com")
+                    settingsSecureField("API Key", text: $imageApiKey)
+                    settingsTextField("模型", text: $imageModel, placeholder: "gpt-image-1")
                 }
+
+                Text("兼容 OpenAI Images API 格式的服务均可使用")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
+                testButton(
+                    state: imageTestState,
+                    label: "测试生图",
+                    disabled: imageApiKey.isEmpty
+                ) {
+                    testImage()
+                }
+
+                Divider()
+
+                // Claude AI 润色
+                sectionHeader("Claude AI（可选）")
+
+                VStack(spacing: 10) {
+                    settingsTextField("API Base URL", text: $claudeApiBase, placeholder: "https://api.anthropic.com")
+                    settingsSecureField("API Key", text: $claudeApiKey)
+                    settingsTextField("模型", text: $claudeModel, placeholder: "claude-sonnet-4-20250514")
+                }
+
+                Text("用于自动去 AI 味、生成摘要和标题")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
+                testButton(
+                    state: claudeTestState,
+                    label: "测试连接",
+                    disabled: claudeApiKey.isEmpty
+                ) {
+                    testClaude()
+                }
+
+                Divider()
 
                 // 导入按钮
                 Button("从 .env 文件导入") {
@@ -142,11 +203,17 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
     }
 
-    private func settingsTextField(_ placeholder: String, text: Binding<String>) -> some View {
-        TextField(placeholder, text: text)
+    private func settingsTextField(_ label: String, text: Binding<String>, placeholder: String? = nil) -> some View {
+        TextField(placeholder ?? label, text: text)
             .textFieldStyle(.roundedBorder)
             .textContentType(.none)
             .autocorrectionDisabled()
+    }
+
+    private func settingsSecureField(_ label: String, text: Binding<String>) -> some View {
+        SecureField(label, text: text)
+            .textFieldStyle(.roundedBorder)
+            .textContentType(.none)
     }
 
     private func settingsPicker<Content: View>(
@@ -170,7 +237,97 @@ struct SettingsView: View {
             .toggleStyle(.switch)
     }
 
+    private func testButton(state: TestState, label: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Button(action: action) {
+                HStack(spacing: 4) {
+                    if state == .testing {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                    Text(state == .testing ? "测试中..." : label)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(disabled || state == .testing)
+
+            switch state {
+            case .success(let msg):
+                Label(msg, systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            case .failure(let msg):
+                Label(msg, systemImage: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            default:
+                EmptyView()
+            }
+        }
+    }
+
     // MARK: - Actions
+
+    private func testWechat() {
+        wechatTestState = .testing
+        Task {
+            do {
+                let msg = try await PublishService.testWechatCredentials(appId: appId, appSecret: appSecret)
+                wechatTestState = .success(msg)
+            } catch {
+                wechatTestState = .failure(friendlyNetworkError(error))
+            }
+        }
+    }
+
+    private func testImage() {
+        imageTestState = .testing
+        Task {
+            do {
+                let msg = try await PublishService.testImageGeneration(
+                    apiBase: imageApiBase,
+                    apiKey: imageApiKey,
+                    model: imageModel
+                )
+                imageTestState = .success(msg)
+            } catch {
+                imageTestState = .failure(friendlyNetworkError(error))
+            }
+        }
+    }
+
+    private func testClaude() {
+        claudeTestState = .testing
+        Task {
+            do {
+                let msg = try await ClaudeService.testConnection(
+                    apiBase: claudeApiBase,
+                    apiKey: claudeApiKey,
+                    model: claudeModel
+                )
+                claudeTestState = .success(msg)
+            } catch {
+                claudeTestState = .failure(friendlyNetworkError(error))
+            }
+        }
+    }
+
+    private func friendlyNetworkError(_ error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorNotConnectedToInternet: return "无网络连接，请检查网络"
+            case NSURLErrorTimedOut: return "连接超时，请稍后再试"
+            case NSURLErrorCannotFindHost: return "无法找到服务器，请检查 URL"
+            case NSURLErrorCannotConnectToHost: return "无法连接到服务器"
+            case NSURLErrorSecureConnectionFailed: return "SSL 连接失败，请检查 URL"
+            default: return "网络错误：\(nsError.localizedDescription)"
+            }
+        }
+        return error.localizedDescription
+    }
 
     private func importFromEnv() {
         let candidates = [
@@ -185,12 +342,22 @@ struct SettingsView: View {
                 let parts = line.split(separator: "=", maxSplits: 1)
                 guard parts.count == 2 else { continue }
                 let key = String(parts[0]).trimmingCharacters(in: .whitespaces)
-                let value = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                var value = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                // 去掉引号
+                if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
+                    (value.hasPrefix("'") && value.hasSuffix("'")) {
+                    value = String(value.dropFirst().dropLast())
+                }
 
                 switch key {
                 case "WECHAT_APP_ID": appId = value
                 case "WECHAT_APP_SECRET": appSecret = value
                 case "IMAGE_API_KEY": imageApiKey = value
+                case "IMAGE_API_BASE": imageApiBase = value
+                case "IMAGE_MODEL": imageModel = value
+                case "CLAUDE_API_KEY", "ANTHROPIC_API_KEY": claudeApiKey = value
+                case "CLAUDE_API_BASE": claudeApiBase = value
+                case "CLAUDE_MODEL": claudeModel = value
                 default: break
                 }
             }
@@ -200,9 +367,24 @@ struct SettingsView: View {
 
     private func syncToState() {
         guard let state else { return }
+        state.username = username
         state.wechatAppId = appId
         state.wechatAppSecret = appSecret
+        state.imageApiBase = imageApiBase
         state.imageApiKey = imageApiKey
+        state.imageModel = imageModel
+        state.claudeApiBase = claudeApiBase
+        state.claudeApiKey = claudeApiKey
+        state.claudeModel = claudeModel
         state.defaultAuthor = defaultAuthor
     }
+}
+
+// MARK: - Test State
+
+enum TestState: Equatable {
+    case idle
+    case testing
+    case success(String)
+    case failure(String)
 }

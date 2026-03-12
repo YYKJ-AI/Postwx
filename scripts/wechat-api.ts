@@ -81,23 +81,13 @@ function loadEnvFile(envPath: string): Record<string, string> {
 }
 
 function loadConfig(): WechatConfig {
-  const cwdEnvPath = path.join(process.cwd(), ".baoyu-skills", ".env");
-  const homeEnvPath = path.join(os.homedir(), ".baoyu-skills", ".env");
-
-  const cwdEnv = loadEnvFile(cwdEnvPath);
-  const homeEnv = loadEnvFile(homeEnvPath);
-
-  const appId =
-    process.env.WECHAT_APP_ID || cwdEnv.WECHAT_APP_ID || homeEnv.WECHAT_APP_ID;
-  const appSecret =
-    process.env.WECHAT_APP_SECRET ||
-    cwdEnv.WECHAT_APP_SECRET ||
-    homeEnv.WECHAT_APP_SECRET;
+  const appId = process.env.WECHAT_APP_ID;
+  const appSecret = process.env.WECHAT_APP_SECRET;
 
   if (!appId || !appSecret) {
     throw new Error(
       "Missing WECHAT_APP_ID or WECHAT_APP_SECRET.\n" +
-        "Set via environment variables or in .baoyu-skills/.env file.",
+        "Please configure credentials in the app settings.",
     );
   }
 
@@ -105,30 +95,15 @@ function loadConfig(): WechatConfig {
 }
 
 function loadImageGenConfig(): ImageGenConfig | null {
-  const cwdEnvPath = path.join(process.cwd(), ".baoyu-skills", ".env");
-  const homeEnvPath = path.join(os.homedir(), ".baoyu-skills", ".env");
-
-  const cwdEnv = loadEnvFile(cwdEnvPath);
-  const homeEnv = loadEnvFile(homeEnvPath);
-
-  const apiKey =
-    process.env.IMAGE_API_KEY || cwdEnv.IMAGE_API_KEY || homeEnv.IMAGE_API_KEY;
+  const apiKey = process.env.IMAGE_API_KEY;
 
   if (!apiKey) return null;
 
   return {
     apiKey,
-    apiBase: "https://api.tu-zi.com/v1",
-    model:
-      process.env.IMAGE_MODEL ||
-      cwdEnv.IMAGE_MODEL ||
-      homeEnv.IMAGE_MODEL ||
-      "gpt-image-1",
-    size:
-      process.env.IMAGE_SIZE ||
-      cwdEnv.IMAGE_SIZE ||
-      homeEnv.IMAGE_SIZE ||
-      "1024x1024",
+    apiBase: process.env.IMAGE_API_BASE || "https://api.tu-zi.com/v1",
+    model: process.env.IMAGE_MODEL || "gpt-image-1",
+    size: process.env.IMAGE_SIZE || "1024x1024",
   };
 }
 
@@ -898,10 +873,23 @@ async function main(): Promise<void> {
   }
 
   if (args.articleType === "news" && !thumbMediaId) {
-    console.error(
-      "Error: No cover image. Provide via --cover, frontmatter.coverImage, or include an image in content.",
-    );
-    process.exit(1);
+    // 尝试自动生成封面图
+    const imageGenConfig = loadImageGenConfig();
+    if (imageGenConfig) {
+      const coverPrompt = `Design a clean, modern cover image for an article titled "${title}". Minimalist style, suitable for WeChat Official Account.`;
+      console.error(`[wechat-api] No cover image found, auto-generating from title...`);
+      const imageBuffer = await generateImage(coverPrompt, imageGenConfig);
+      const tmpCover = path.join(os.tmpdir(), `postwx-cover-${Date.now()}.png`);
+      fs.writeFileSync(tmpCover, imageBuffer);
+      console.error(`[wechat-api] Uploading auto-generated cover: ${tmpCover}`);
+      const coverResp = await uploadImage(tmpCover, accessToken, baseDir);
+      thumbMediaId = coverResp.media_id;
+    } else {
+      console.error(
+        "Error: No cover image. Provide via --cover, frontmatter.coverImage, include an image in content, or configure IMAGE_API_KEY for auto-generation.",
+      );
+      process.exit(1);
+    }
   }
 
   if (args.articleType === "newspic" && allMediaIds.length === 0) {

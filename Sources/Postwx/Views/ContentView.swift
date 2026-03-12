@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var state = AppState()
     @State private var droppedFileURL: URL?
     @State private var showSettings = false
+    @State private var publishError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,9 +27,18 @@ struct ContentView: View {
                     .frame(width: 220)
             }
         }
+        .onAppear { loadCredentials() }
         .sheet(isPresented: $showSettings) {
             SettingsView(state: state)
                 .interactiveDismissDisabled(false)
+        }
+        .alert("发布失败", isPresented: Binding(
+            get: { publishError != nil },
+            set: { if !$0 { publishError = nil } }
+        )) {
+            Button("好的") { publishError = nil }
+        } message: {
+            Text(publishError ?? "")
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
@@ -131,6 +141,16 @@ struct ContentView: View {
 
             Divider()
 
+            // Claude 状态
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(ClaudeService.isAvailable(state: state) ? .green : .orange)
+                    .frame(width: 6, height: 6)
+                Text(ClaudeService.isAvailable(state: state) ? "Claude 已连接" : "Claude 未配置")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             // 发布状态
             if state.isPublishing {
                 VStack(alignment: .leading, spacing: 6) {
@@ -219,30 +239,73 @@ struct ContentView: View {
 
         Task {
             do {
+                var content = state.content
+                var title = state.title
+                var summary = state.summary
+
+                // Claude AI 处理（如果配置了 Claude API Key）
+                let claudeAvailable = ClaudeService.isAvailable(state: state)
+                if claudeAvailable {
+                    let claudeConfig = ClaudeService.config(from: state)
+
+                    // 自动提取标题
+                    if title.isEmpty {
+                        state.publishProgress = .detectingInput
+                        title = try await ClaudeService.generateTitle(config: claudeConfig, content: content)
+                        state.title = title
+                    }
+
+                    // 去 AI 味
+                    state.publishProgress = .deAI
+                    content = try await ClaudeService.deAI(config: claudeConfig, content: content)
+                    state.content = content
+
+                    // 自动生成摘要
+                    if summary.isEmpty {
+                        state.publishProgress = .adaptingRole
+                        summary = try await ClaudeService.generateSummary(config: claudeConfig, content: content, title: title)
+                        state.summary = summary
+                    }
+                }
+
                 // 保存内容到临时文件
+                state.publishProgress = .loadingPrefs
                 let filePath: String
                 if let url = droppedFileURL {
-                    filePath = url.path
+                    // 如果内容被 Claude 处理过，写回临时文件
+                    if claudeAvailable {
+                        filePath = PublishService.saveTempMarkdown(
+                            content: content,
+                            title: title
+                        )
+                    } else {
+                        filePath = url.path
+                    }
                 } else {
                     filePath = PublishService.saveTempMarkdown(
-                        content: state.content,
-                        title: state.title
+                        content: content,
+                        title: title
                     )
                 }
 
                 state.publishProgress = .publishing
 
-                // 查找 .env 文件
-                let envPath = findEnvPath()
+                let credentials = PublishService.Credentials(
+                    wechatAppId: state.wechatAppId,
+                    wechatAppSecret: state.wechatAppSecret,
+                    imageApiBase: state.imageApiBase,
+                    imageApiKey: state.imageApiKey,
+                    imageModel: state.imageModel
+                )
 
                 let result = try await PublishService.publish(
                     filePath: filePath,
                     theme: state.selectedTheme,
                     color: state.selectedColor,
-                    title: state.title.isEmpty ? nil : state.title,
-                    summary: state.summary.isEmpty ? nil : state.summary,
+                    title: title.isEmpty ? nil : title,
+                    summary: summary.isEmpty ? nil : summary,
                     author: state.author.isEmpty ? nil : state.author,
-                    envPath: envPath,
+                    credentials: credentials,
                     onLog: { log in
                         Task { @MainActor in
                             state.publishLog.append(log)
@@ -255,20 +318,29 @@ struct ContentView: View {
             } catch {
                 state.publishProgress = .failed
                 state.publishLog.append("错误: \(error.localizedDescription)")
+                publishError = error.localizedDescription
             }
 
-            try? await Task.sleep(for: .seconds(2))
+            if state.publishProgress == .done {
+                try? await Task.sleep(for: .seconds(2))
+            }
             state.isPublishing = false
             state.publishProgress = .idle
         }
     }
 
-    private func findEnvPath() -> String? {
-        let candidates = [
-            FileManager.default.currentDirectoryPath + "/.baoyu-skills/.env",
-            NSHomeDirectory() + "/.baoyu-skills/.env",
-        ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0) }
+    private func loadCredentials() {
+        let defaults = UserDefaults.standard
+        state.username = defaults.string(forKey: "username") ?? ""
+        state.wechatAppId = defaults.string(forKey: "wechatAppId") ?? ""
+        state.wechatAppSecret = defaults.string(forKey: "wechatAppSecret") ?? ""
+        state.imageApiBase = defaults.string(forKey: "imageApiBase") ?? ""
+        state.imageApiKey = defaults.string(forKey: "imageApiKey") ?? ""
+        state.imageModel = defaults.string(forKey: "imageModel") ?? ""
+        state.claudeApiBase = defaults.string(forKey: "claudeApiBase") ?? ""
+        state.claudeApiKey = defaults.string(forKey: "claudeApiKey") ?? ""
+        state.claudeModel = defaults.string(forKey: "claudeModel") ?? ""
+        state.defaultAuthor = defaults.string(forKey: "defaultAuthor") ?? ""
     }
 }
 
