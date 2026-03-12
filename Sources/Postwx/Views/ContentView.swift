@@ -1,6 +1,30 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Design Tokens
+
+private enum Design {
+    static let accentGradient = LinearGradient(
+        colors: [Color(hue: 0.72, saturation: 0.65, brightness: 0.95),
+                 Color(hue: 0.58, saturation: 0.70, brightness: 0.90)],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    )
+    static let successGradient = LinearGradient(
+        colors: [Color(hue: 0.38, saturation: 0.55, brightness: 0.85),
+                 Color(hue: 0.45, saturation: 0.60, brightness: 0.80)],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    )
+    static let warningGradient = LinearGradient(
+        colors: [Color.orange.opacity(0.85), Color(hue: 0.08, saturation: 0.70, brightness: 0.90)],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    )
+    static let panelBg = Color(nsColor: .controlBackgroundColor)
+    static let cardBg = Color(nsColor: .windowBackgroundColor)
+    static let subtleBorder = Color.primary.opacity(0.06)
+    static let radius: CGFloat = 10
+    static let smallRadius: CGFloat = 7
+}
+
 struct ContentView: View {
     @State private var state = AppState()
     @State private var droppedFileURL: URL?
@@ -13,24 +37,19 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-
-            Divider()
+            Divider().opacity(0.5)
 
             HSplitView {
-                // 左侧：编辑区
                 editorPanel
                     .frame(minWidth: 300)
 
-                // 右侧：工作流面板
                 workflowPanel
-                    .frame(width: 260)
+                    .frame(width: 280)
             }
         }
+        .background(Design.panelBg.opacity(0.5))
         .onAppear {
             loadCredentials()
-            // 用 @AppStorage 直接读取，确保作者默认值生效
             if state.author.isEmpty {
                 let fallback = storedDefaultAuthor.isEmpty ? storedUsername : storedDefaultAuthor
                 if !fallback.isEmpty { state.author = fallback }
@@ -56,122 +75,172 @@ struct ContentView: View {
     // MARK: - Toolbar
 
     private var toolbar: some View {
-        HStack {
-            Text("Postwx")
-                .font(.headline)
-                .foregroundStyle(.secondary)
+        HStack(spacing: 12) {
+            // Logo / App name
+            HStack(spacing: 6) {
+                Image(systemName: "paperplane.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Design.accentGradient)
+                Text("Postwx")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.8))
+            }
 
             // 工作流状态标签
             if state.isReviewing {
-                Label("审核中", systemImage: "eye")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(.orange.opacity(0.1), in: Capsule())
+                StatusPill(label: "审核中", icon: "eye.fill", color: .orange)
+                    .transition(.scale.combined(with: .opacity))
             } else if state.isProcessing {
-                Label("处理中", systemImage: "gearshape.2")
-                    .font(.caption)
-                    .foregroundStyle(.blue)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(.blue.opacity(0.1), in: Capsule())
+                StatusPill(label: "处理中", icon: "sparkles", color: .blue)
+                    .transition(.scale.combined(with: .opacity))
             }
 
             Spacer()
 
             if state.isReviewing {
-                Button("查看原文") {
+                Button {
                     showOriginalContent.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: showOriginalContent ? "doc.on.doc.fill" : "doc.on.doc")
+                            .font(.caption)
+                        Text(showOriginalContent ? "隐藏原文" : "对比原文")
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: Capsule())
                 }
-                .buttonStyle(.borderless)
-                .font(.caption)
+                .buttonStyle(.plain)
             }
 
-            Button {
+            ToolbarButton(icon: "doc.badge.plus", label: "打开") {
                 openFile()
-            } label: {
-                Label("打开文件", systemImage: "doc")
             }
-            .buttonStyle(.borderless)
             .disabled(state.isBusy)
 
-            Button {
+            ToolbarButton(icon: "gearshape", label: "设置") {
                 showSettings = true
-            } label: {
-                Label("设置", systemImage: "gearshape")
             }
-            .buttonStyle(.borderless)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .animation(.snappy(duration: 0.3), value: state.isReviewing)
+        .animation(.snappy(duration: 0.3), value: state.isProcessing)
     }
 
     // MARK: - Editor Panel
 
     private var editorPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        ZStack {
             if state.isReviewing && showOriginalContent {
-                // 审核模式：显示原文对比
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Text("原文内容（只读）")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("关闭原文") { showOriginalContent = false }
-                            .buttonStyle(.borderless)
-                            .font(.caption)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-
-                    ScrollView {
-                        Text(state.originalContent)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                    }
-                    .background(Color.yellow.opacity(0.05))
-                }
+                originalContentView
             } else if state.content.isEmpty {
                 emptyState
             } else {
-                // 审核模式下编辑器标题
-                if state.isReviewing {
-                    HStack {
-                        Text("AI 处理后内容（可编辑）")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if let score = state.deAIScore {
-                            Text("去AI味评分: \(score)/50")
-                                .font(.caption)
-                                .foregroundStyle(score >= 45 ? .green : score >= 35 ? .orange : .red)
-                        }
+                VStack(alignment: .leading, spacing: 0) {
+                    if state.isReviewing {
+                        reviewHeader
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
+                    TextEditor(text: $state.content)
+                        .font(.system(.body, design: .monospaced))
+                        .scrollContentBackground(.hidden)
+                        .padding(14)
                 }
-
-                TextEditor(text: $state.content)
-                    .font(.system(.body, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .padding(12)
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "doc.text")
-                .font(.system(size: 36))
-                .foregroundStyle(.quaternary)
-            Text("拖拽 Markdown 文件到此处")
-                .foregroundStyle(.secondary)
-            Text("或粘贴文本内容")
+    private var originalContentView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Label("原文内容", systemImage: "doc.text")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    showOriginalContent = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .background(.quaternary.opacity(0.5), in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            ScrollView {
+                Text(state.originalContent)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+            }
+            .background(Color.orange.opacity(0.03))
+        }
+    }
+
+    private var reviewHeader: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "pencil.and.outline")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.blue)
+            Text("AI 处理后（可编辑）")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer()
+            if let score = state.deAIScore {
+                ScoreBadge(score: score)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 4)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(Design.accentGradient.opacity(0.08))
+                    .frame(width: 80, height: 80)
+                Circle()
+                    .fill(Design.accentGradient.opacity(0.05))
+                    .frame(width: 60, height: 60)
+                Image(systemName: "doc.text.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(Design.accentGradient)
+            }
+
+            VStack(spacing: 6) {
+                Text("拖拽文件到此处")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.7))
+                Text("支持 Markdown、HTML、纯文本")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+            }
+
+            Button {
+                openFile()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 11))
+                    Text("选择文件")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 7)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(Design.subtleBorder, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
@@ -188,16 +257,13 @@ struct ContentView: View {
     private var workflowPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    // 元数据字段
+                VStack(alignment: .leading, spacing: 16) {
                     if !state.isProcessing {
                         metadataFields
-                        Divider()
                     }
 
-                    // 工作流步骤指示器
+                    // 工作流步骤
                     workflowSteps
-                        .padding(.vertical, 4)
 
                     // AI 实时输出
                     if state.isProcessing && !state.aiStreamingText.isEmpty {
@@ -206,13 +272,11 @@ struct ContentView: View {
 
                     // AI 状态
                     if state.workflowState == .idle {
-                        Divider()
                         aiStatusIndicator
                     }
 
                     // 完成状态
                     if case .done(let mediaId) = state.workflowState {
-                        Divider()
                         doneSection(mediaId: mediaId)
                     }
                 }
@@ -225,21 +289,22 @@ struct ContentView: View {
             actionButtons
                 .padding(16)
         }
+        .background(Design.panelBg.opacity(0.3))
     }
 
     // MARK: - Metadata Fields
 
     private var metadataFields: some View {
-        Group {
-            LabeledField("标题", text: $state.title, prompt: "自动提取")
+        VStack(spacing: 10) {
+            StyledField(label: "标题", icon: "textformat", text: $state.title, prompt: "自动提取")
                 .disabled(state.isBusy)
-            LabeledField("作者", text: $state.author, prompt: {
-                    if !storedDefaultAuthor.isEmpty { return storedDefaultAuthor }
-                    if !storedUsername.isEmpty { return storedUsername }
-                    return "可选"
-                }())
+            StyledField(label: "作者", icon: "person", text: $state.author, prompt: {
+                if !storedDefaultAuthor.isEmpty { return storedDefaultAuthor }
+                if !storedUsername.isEmpty { return storedUsername }
+                return "可选"
+            }())
                 .disabled(state.isBusy)
-            LabeledField("摘要", text: $state.summary, prompt: "自动生成", axis: .vertical)
+            StyledField(label: "摘要", icon: "text.alignleft", text: $state.summary, prompt: "自动生成", axis: .vertical)
                 .disabled(state.isBusy)
         }
     }
@@ -247,32 +312,50 @@ struct ContentView: View {
     // MARK: - Workflow Steps
 
     private var workflowSteps: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("工作流")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 6)
-
-            ForEach(WorkflowStep.allCases) { step in
-                WorkflowStepRow(step: step, status: state.stepStatus(step))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "list.bullet.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Design.accentGradient)
+                Text("工作流")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
+            .padding(.bottom, 10)
+
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(WorkflowStep.allCases.enumerated()), id: \.element.id) { index, step in
+                    WorkflowStepRow(
+                        step: step,
+                        status: state.stepStatus(step),
+                        isLast: index == WorkflowStep.allCases.count - 1
+                    )
+                }
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: Design.radius)
+                    .fill(Design.cardBg)
+                    .shadow(color: .black.opacity(0.04), radius: 4, y: 2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Design.radius)
+                    .stroke(Design.subtleBorder, lineWidth: 1)
+            )
         }
     }
-
-    // 主题配色由 AI 自动选择（Step 4）
 
     // MARK: - AI Streaming Output
 
     private var aiStreamingOutput: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Divider()
-
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "sparkle")
-                    .font(.caption)
-                    .foregroundStyle(.blue)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Design.accentGradient)
+                    .symbolEffect(.pulse, options: .repeating)
                 Text(state.aiCurrentStep.isEmpty ? "AI 输出" : state.aiCurrentStep)
-                    .font(.subheadline.weight(.medium))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 ProgressView()
@@ -282,52 +365,95 @@ struct ContentView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     Text(state.aiStreamingText.suffix(1500))
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary.opacity(0.85))
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
+                        .padding(10)
                         .id("bottom")
                 }
-                .frame(maxHeight: 160)
-                .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .frame(maxHeight: 150)
+                .background(
+                    RoundedRectangle(cornerRadius: Design.smallRadius)
+                        .fill(Color(nsColor: .textBackgroundColor).opacity(0.6))
+                )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.blue.opacity(0.15), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: Design.smallRadius)
+                        .stroke(Color.blue.opacity(0.12), lineWidth: 1)
                 )
                 .onChange(of: state.aiStreamingText) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: Design.radius)
+                .fill(Design.cardBg)
+                .shadow(color: .black.opacity(0.03), radius: 3, y: 1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Design.radius)
+                .stroke(Design.subtleBorder, lineWidth: 1)
+        )
     }
 
     // MARK: - AI Status
 
     private var aiStatusIndicator: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Circle()
                 .fill(AIService.isAvailable() ? .green : .orange)
-                .frame(width: 7, height: 7)
+                .frame(width: 6, height: 6)
+                .shadow(color: AIService.isAvailable() ? .green.opacity(0.4) : .orange.opacity(0.4), radius: 3)
             Text(AIService.isAvailable() ? "Claude AI 已就绪" : "Claude CLI 未安装")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: Capsule())
     }
 
     // MARK: - Done Section
 
     private func doneSection(mediaId: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("发布成功", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .font(.subheadline.weight(.medium))
-            Text("media_id: \(mediaId)")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .textSelection(.enabled)
-                .lineLimit(2)
+        VStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(Design.successGradient.opacity(0.12))
+                    .frame(width: 48, height: 48)
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundStyle(Design.successGradient)
+            }
+
+            Text("发布成功！")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.8))
+
+            if !mediaId.isEmpty {
+                Text("media_id: \(mediaId)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 5))
+            }
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: Design.radius)
+                .fill(Design.cardBg)
+                .shadow(color: .black.opacity(0.03), radius: 3, y: 1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Design.radius)
+                .stroke(Color.green.opacity(0.15), lineWidth: 1)
+        )
     }
 
     // MARK: - Action Buttons
@@ -335,18 +461,13 @@ struct ContentView: View {
     private var actionButtons: some View {
         VStack(spacing: 8) {
             if state.isReviewing {
-                // 审核模式：确认发布 + 返回编辑
-                Button {
+                GradientButton(
+                    label: "确认发布",
+                    icon: "paperplane.fill",
+                    gradient: Design.accentGradient
+                ) {
                     confirmPublish()
-                } label: {
-                    HStack {
-                        Image(systemName: "paperplane.fill")
-                        Text("确认发布")
-                    }
-                    .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
 
                 Button("返回编辑") {
                     cancelReview()
@@ -355,36 +476,36 @@ struct ContentView: View {
                 .controlSize(.small)
                 .frame(maxWidth: .infinity)
             } else if state.isPublishing {
-                // 发布中
-                HStack {
+                HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
                     Text("正在发布到草稿箱...")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
+                .padding(.vertical, 8)
             } else if case .done = state.workflowState {
-                // 完成
-                Button("新建文章") {
+                Button {
                     resetAll()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus.circle")
+                        Text("新建文章")
+                    }
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
-                .frame(maxWidth: .infinity)
             } else if case .failed = state.workflowState {
-                // 失败
                 VStack(spacing: 6) {
-                    Button {
+                    GradientButton(
+                        label: "重试",
+                        icon: "arrow.clockwise",
+                        gradient: Design.warningGradient
+                    ) {
                         startWorkflow()
-                    } label: {
-                        HStack {
-                            Image(systemName: "arrow.clockwise")
-                            Text("重试")
-                        }
-                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
 
                     Button("重置") {
                         state.resetWorkflow()
@@ -394,23 +515,14 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                 }
             } else {
-                // 默认：开始处理
-                Button {
+                GradientButton(
+                    label: state.isProcessing ? "处理中..." : "开始处理",
+                    icon: state.isProcessing ? nil : "wand.and.stars",
+                    gradient: Design.accentGradient,
+                    isLoading: state.isProcessing
+                ) {
                     startWorkflow()
-                } label: {
-                    HStack {
-                        if state.isProcessing {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "wand.and.stars")
-                        }
-                        Text(state.isProcessing ? "处理中..." : "开始处理")
-                    }
-                    .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
                 .disabled(state.content.isEmpty || state.isBusy || !state.hasCredentials)
                 .help(state.hasCredentials ? "" : "请先在设置中配置微信凭证")
             }
@@ -514,7 +626,6 @@ struct ContentView: View {
                         ))
                     } catch {
                         state.updateStep(.roleAdaptation, status: .failed(error.localizedDescription))
-                        // 角色适配失败不阻断流程
                     }
 
                     // ── Step 3: 去 AI 味 ──
@@ -598,7 +709,6 @@ struct ContentView: View {
                         state.updateStep(.imageGeneration, status: .skipped("未配置 IMAGE_API_KEY"))
                     }
                 } else {
-                    // Claude CLI 不可用，跳过 AI 步骤
                     state.updateStep(.roleAdaptation, status: .skipped("Claude CLI 未安装"))
                     state.updateStep(.deAI, status: .skipped("Claude CLI 未安装"))
                     state.updateStep(.themeSelection, status: .skipped("Claude CLI 未安装"))
@@ -630,7 +740,6 @@ struct ContentView: View {
                 let summary = state.summary
                 let format = state.inputFormat
 
-                // 保存临时文件（HTML 格式直接使用）
                 let filePath: String
                 if format == .html {
                     let dir = "/tmp/postwx/\(formattedDate())"
@@ -667,7 +776,6 @@ struct ContentView: View {
                     }
                 )
 
-                // 提取 media_id
                 var mediaId = ""
                 if let data = result.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -687,7 +795,6 @@ struct ContentView: View {
     }
 
     private func cancelReview() {
-        // 恢复原始内容
         state.content = state.originalContent
         state.resetWorkflow()
     }
@@ -696,7 +803,6 @@ struct ContentView: View {
         state.content = ""
         state.title = ""
         state.summary = ""
-        // 重置作者为默认值（优先默认作者，其次用户名）
         let fallback = state.defaultAuthor.isEmpty ? state.username : state.defaultAuthor
         state.author = fallback
         droppedFileURL = nil
@@ -722,7 +828,6 @@ struct ContentView: View {
         state.imageModel = defaults.string(forKey: "imageModel") ?? ""
         state.defaultAuthor = defaults.string(forKey: "defaultAuthor") ?? ""
 
-        // 自动填充作者：优先使用默认作者，其次使用用户名
         if state.author.isEmpty {
             let fallbackAuthor = state.defaultAuthor.isEmpty ? state.username : state.defaultAuthor
             if !fallbackAuthor.isEmpty {
@@ -750,75 +855,127 @@ struct ContentView: View {
 struct WorkflowStepRow: View {
     let step: WorkflowStep
     let status: StepStatus
+    var isLast: Bool = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            // 步骤序号 / 状态图标
-            statusIcon
-                .frame(width: 22, height: 22)
+        HStack(alignment: .top, spacing: 12) {
+            // 左侧：图标 + 连接线
+            VStack(spacing: 0) {
+                statusIcon
+                    .frame(width: 24, height: 24)
 
+                if !isLast {
+                    Rectangle()
+                        .fill(connectorColor)
+                        .frame(width: 1.5, height: 20)
+                }
+            }
+
+            // 右侧：内容
             VStack(alignment: .leading, spacing: 2) {
-                Text(step.label)
-                    .font(.subheadline.weight(status == .running ? .semibold : .regular))
-                    .foregroundStyle(textColor)
+                HStack(spacing: 6) {
+                    Image(systemName: step.icon)
+                        .font(.system(size: 10))
+                        .foregroundStyle(iconTint)
+                    Text(step.label)
+                        .font(.system(size: 12, weight: status == .running ? .semibold : .regular))
+                        .foregroundStyle(textColor)
+                }
 
-                // 状态详情
                 switch status {
                 case .completed(let detail):
                     if !detail.isEmpty {
                         Text(detail)
-                            .font(.caption)
+                            .font(.system(size: 10))
                             .foregroundStyle(.green.opacity(0.8))
                             .lineLimit(1)
                     }
                 case .failed(let msg):
                     Text(msg)
-                        .font(.caption)
+                        .font(.system(size: 10))
                         .foregroundStyle(.orange)
                         .lineLimit(2)
                 case .skipped(let reason):
                     Text(reason)
-                        .font(.caption)
+                        .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                 case .running:
                     Text("处理中...")
-                        .font(.caption)
+                        .font(.system(size: 10))
                         .foregroundStyle(.blue.opacity(0.7))
                 default:
                     EmptyView()
                 }
             }
+            .padding(.bottom, isLast ? 0 : 6)
 
             Spacer()
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 8)
-        .background(backgroundColor, in: RoundedRectangle(cornerRadius: 6))
+        .animation(.snappy(duration: 0.3), value: status)
     }
 
     @ViewBuilder
     private var statusIcon: some View {
         switch status {
         case .pending:
-            Image(systemName: "circle")
-                .font(.subheadline)
-                .foregroundStyle(.quaternary)
+            Circle()
+                .stroke(Color.secondary.opacity(0.3), lineWidth: 1.5)
+                .frame(width: 18, height: 18)
         case .running:
-            ProgressView()
-                .controlSize(.small)
+            ZStack {
+                Circle()
+                    .fill(Color.blue.opacity(0.1))
+                    .frame(width: 20, height: 20)
+                ProgressView()
+                    .controlSize(.mini)
+            }
         case .completed:
-            Image(systemName: "checkmark.circle.fill")
-                .font(.subheadline)
-                .foregroundStyle(.green)
+            ZStack {
+                Circle()
+                    .fill(Color.green.opacity(0.12))
+                    .frame(width: 20, height: 20)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.green)
+            }
         case .skipped:
-            Image(systemName: "minus.circle")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
+            ZStack {
+                Circle()
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(width: 20, height: 20)
+                Image(systemName: "minus")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
         case .failed:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.subheadline)
-                .foregroundStyle(.orange)
+            ZStack {
+                Circle()
+                    .fill(Color.orange.opacity(0.12))
+                    .frame(width: 20, height: 20)
+                Image(systemName: "exclamationmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private var connectorColor: Color {
+        switch status {
+        case .completed: .green.opacity(0.25)
+        case .running: .blue.opacity(0.2)
+        case .failed: .orange.opacity(0.2)
+        default: Color.secondary.opacity(0.15)
+        }
+    }
+
+    private var iconTint: Color {
+        switch status {
+        case .running: .blue
+        case .completed: .green
+        case .failed: .orange
+        case .skipped: .secondary
+        default: Color.secondary.opacity(0.6)
         }
     }
 
@@ -831,39 +988,133 @@ struct WorkflowStepRow: View {
         case .failed: .primary
         }
     }
+}
 
-    private var backgroundColor: Color {
-        switch status {
-        case .running: .blue.opacity(0.06)
-        case .failed: .orange.opacity(0.06)
-        default: .clear
+// MARK: - Reusable Components
+
+struct StatusPill: View {
+    let label: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .bold))
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
         }
+        .foregroundStyle(color)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(color.opacity(0.1), in: Capsule())
     }
 }
 
-// MARK: - Components
-
-struct LabeledField: View {
+struct ToolbarButton: View {
+    let icon: String
     let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct StyledField: View {
+    let label: String
+    let icon: String
     @Binding var text: String
     var prompt: String = ""
     var axis: Axis = .horizontal
 
-    init(_ label: String, text: Binding<String>, prompt: String = "", axis: Axis = .horizontal) {
-        self.label = label
-        self._text = text
-        self.prompt = prompt
-        self.axis = axis
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            TextField(prompt, text: $text, axis: axis)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: Design.smallRadius)
+                        .fill(Color(nsColor: .textBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Design.smallRadius)
+                        .stroke(Design.subtleBorder, lineWidth: 1)
+                )
+        }
+    }
+}
+
+struct ScoreBadge: View {
+    let score: Int
+
+    private var color: Color {
+        score >= 45 ? .green : score >= 35 ? .orange : .red
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            TextField(prompt, text: $text, axis: axis)
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.regular)
+        HStack(spacing: 3) {
+            Image(systemName: "shield.checkered")
+                .font(.system(size: 9))
+            Text("\(score)/50")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
         }
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.1), in: Capsule())
+    }
+}
+
+struct GradientButton: View {
+    let label: String
+    var icon: String?
+    let gradient: LinearGradient
+    var isLoading: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                } else if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                Text(label)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(gradient, in: RoundedRectangle(cornerRadius: 8))
+            .shadow(color: .black.opacity(0.1), radius: 3, y: 2)
+        }
+        .buttonStyle(.plain)
     }
 }

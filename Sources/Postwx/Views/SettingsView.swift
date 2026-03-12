@@ -22,39 +22,21 @@ struct SettingsView: View {
     @State private var imageTestState: TestState = .idle
     @State private var claudeTestState: TestState = .idle
 
+    private let accentGradient = LinearGradient(
+        colors: [Color(hue: 0.72, saturation: 0.65, brightness: 0.95),
+                 Color(hue: 0.58, saturation: 0.70, brightness: 0.90)],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    )
+
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部标题栏 + 关闭按钮
-            HStack {
-                Spacer()
-                Text("设置")
-                    .font(.headline)
-                Spacer()
-            }
-            .overlay(alignment: .trailing) {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
+            // 顶部标题栏
+            header
 
             // Tab 切换
-            Picker("", selection: $selectedTab) {
-                Text("凭证").tag(0)
-                Text("偏好").tag(1)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 8)
+            tabPicker
 
-            Divider()
+            Divider().opacity(0.5)
 
             // 内容区
             Group {
@@ -65,8 +47,55 @@ struct SettingsView: View {
                 }
             }
         }
-        .frame(width: 420, height: 580)
+        .frame(width: 440, height: 600)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onDisappear { syncToState() }
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack {
+            Spacer()
+            HStack(spacing: 6) {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(accentGradient)
+                Text("设置")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+            }
+            Spacer()
+        }
+        .overlay(alignment: .trailing) {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .background(.quaternary.opacity(0.5), in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 10)
+    }
+
+    // MARK: - Tab Picker
+
+    private var tabPicker: some View {
+        HStack(spacing: 4) {
+            TabButton(title: "凭证", icon: "key.fill", isSelected: selectedTab == 0) {
+                withAnimation(.snappy(duration: 0.2)) { selectedTab = 0 }
+            }
+            TabButton(title: "偏好", icon: "slider.horizontal.3", isSelected: selectedTab == 1) {
+                withAnimation(.snappy(duration: 0.2)) { selectedTab = 1 }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 10)
     }
 
     // MARK: - Credentials Tab
@@ -75,93 +104,106 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 // 用户信息
-                sectionHeader("用户信息")
-                settingsTextField("用户名", text: $username)
-
-                Divider()
+                SettingsCard(title: "用户信息", icon: "person.circle.fill", color: .blue) {
+                    SettingsTextField("用户名", text: $username)
+                }
 
                 // 微信公众号
-                sectionHeader("微信公众号")
+                SettingsCard(title: "微信公众号", icon: "message.fill", color: .green) {
+                    VStack(spacing: 10) {
+                        SettingsTextField("App ID", text: $appId)
+                        SettingsSecureField("App Secret", text: $appSecret)
+                    }
 
-                VStack(spacing: 10) {
-                    settingsTextField("App ID", text: $appId)
-                    settingsSecureField("App Secret", text: $appSecret)
+                    SettingsTestButton(
+                        state: wechatTestState,
+                        label: "测试连接",
+                        disabled: appId.isEmpty || appSecret.isEmpty
+                    ) {
+                        testWechat()
+                    }
                 }
-
-                testButton(
-                    state: wechatTestState,
-                    label: "测试连接",
-                    disabled: appId.isEmpty || appSecret.isEmpty
-                ) {
-                    testWechat()
-                }
-
-                Divider()
 
                 // AI 配图
-                sectionHeader("AI 配图（可选）")
-
-                VStack(spacing: 10) {
-                    settingsTextField("API Base URL", text: $imageApiBase, placeholder: "https://api.tu-zi.com")
-                    settingsSecureField("API Key", text: $imageApiKey)
-                    settingsTextField("模型", text: $imageModel, placeholder: "gpt-image-1")
-                }
-
-                Text("兼容 OpenAI Images API 格式的服务均可使用")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-
-                testButton(
-                    state: imageTestState,
-                    label: "测试生图",
-                    disabled: imageApiKey.isEmpty
-                ) {
-                    testImage()
-                }
-
-                Divider()
-
-                // Claude Code AI
-                sectionHeader("AI 润色")
-
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(AIService.isAvailable() ? .green : .orange)
-                        .frame(width: 8, height: 8)
-                    Text(AIService.isAvailable()
-                         ? "Claude Code 已就绪（复用系统认证）"
-                         : "未检测到 claude CLI，请先安装 Claude Code")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if AIService.isAvailable() {
-                    Text("自动使用系统级 Claude Code 认证，无需额外配置 API Key")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-
-                    testButton(
-                        state: claudeTestState,
-                        label: "测试 AI",
-                        disabled: false
-                    ) {
-                        testClaude()
+                SettingsCard(title: "AI 配图", icon: "photo.artframe", color: .purple, badge: "可选") {
+                    VStack(spacing: 10) {
+                        SettingsTextField("API Base URL", text: $imageApiBase, placeholder: "https://api.tu-zi.com")
+                        SettingsSecureField("API Key", text: $imageApiKey)
+                        SettingsTextField("模型", text: $imageModel, placeholder: "gpt-image-1")
                     }
-                } else {
-                    Text("安装：npm install -g @anthropic-ai/claude-code")
-                        .font(.caption)
+
+                    Text("兼容 OpenAI Images API 格式的服务均可使用")
+                        .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
-                        .textSelection(.enabled)
+
+                    SettingsTestButton(
+                        state: imageTestState,
+                        label: "测试生图",
+                        disabled: imageApiKey.isEmpty
+                    ) {
+                        testImage()
+                    }
                 }
 
-                Divider()
+                // Claude AI
+                SettingsCard(title: "AI 润色", icon: "sparkles", color: .indigo) {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(AIService.isAvailable() ? .green : .orange)
+                            .frame(width: 7, height: 7)
+                            .shadow(color: AIService.isAvailable() ? .green.opacity(0.4) : .orange.opacity(0.4), radius: 3)
+                        Text(AIService.isAvailable()
+                             ? "Claude Code 已就绪"
+                             : "未检测到 claude CLI")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if AIService.isAvailable() {
+                        Text("自动使用系统级认证，无需额外配置")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+
+                        SettingsTestButton(
+                            state: claudeTestState,
+                            label: "测试 AI",
+                            disabled: false
+                        ) {
+                            testClaude()
+                        }
+                    } else {
+                        HStack(spacing: 4) {
+                            Image(systemName: "terminal")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                            Text("npm install -g @anthropic-ai/claude-code")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
 
                 // 导入按钮
-                Button("从 .env 文件导入") {
-                    importFromEnv()
+                HStack {
+                    Spacer()
+                    Button {
+                        importFromEnv()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "square.and.arrow.down")
+                                .font(.system(size: 11))
+                            Text("从 .env 文件导入")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
                 }
-                .buttonStyle(.link)
-                .font(.caption)
             }
             .padding(20)
         }
@@ -172,108 +214,57 @@ struct SettingsView: View {
     private var preferencesTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                sectionHeader("创作角色")
-
-                VStack(spacing: 10) {
-                    settingsPicker("角色", selection: $creatorRole) {
-                        ForEach(CreatorRole.allCases) { role in
-                            Text(role.displayName).tag(role.rawValue)
+                SettingsCard(title: "创作角色", icon: "person.text.rectangle.fill", color: .orange) {
+                    VStack(spacing: 10) {
+                        SettingsPickerField("角色", selection: $creatorRole) {
+                            ForEach(CreatorRole.allCases) { role in
+                                Text(role.displayName).tag(role.rawValue)
+                            }
                         }
-                    }
-                    settingsPicker("风格", selection: $writingStyle) {
-                        ForEach(WritingStyle.allCases) { style in
-                            Text(style.displayName).tag(style.rawValue)
+                        SettingsPickerField("风格", selection: $writingStyle) {
+                            ForEach(WritingStyle.allCases) { style in
+                                Text(style.displayName).tag(style.rawValue)
+                            }
                         }
-                    }
-                    settingsPicker("受众", selection: $targetAudience) {
-                        ForEach(TargetAudience.allCases) { audience in
-                            Text(audience.displayName).tag(audience.rawValue)
+                        SettingsPickerField("受众", selection: $targetAudience) {
+                            ForEach(TargetAudience.allCases) { audience in
+                                Text(audience.displayName).tag(audience.rawValue)
+                            }
                         }
                     }
                 }
 
-                sectionHeader("发布设置")
+                SettingsCard(title: "发布设置", icon: "paperplane.fill", color: .teal) {
+                    VStack(spacing: 10) {
+                        SettingsTextField("默认作者", text: $defaultAuthor)
 
-                VStack(spacing: 10) {
-                    settingsTextField("默认作者", text: $defaultAuthor)
-                    settingsToggle("开启评论", isOn: $needOpenComment)
-                    settingsToggle("仅粉丝可评论", isOn: $onlyFansCanComment)
+                        VStack(spacing: 8) {
+                            Toggle(isOn: $needOpenComment) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "bubble.left.and.bubble.right")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                    Text("开启评论")
+                                        .font(.system(size: 13))
+                                }
+                            }
+                            .toggleStyle(.switch)
+
+                            Toggle(isOn: $onlyFansCanComment) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "heart.circle")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                    Text("仅粉丝可评论")
+                                        .font(.system(size: 13))
+                                }
+                            }
+                            .toggleStyle(.switch)
+                        }
+                    }
                 }
             }
             .padding(20)
-        }
-    }
-
-    // MARK: - Components
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(.secondary)
-    }
-
-    private func settingsTextField(_ label: String, text: Binding<String>, placeholder: String? = nil) -> some View {
-        TextField(placeholder ?? label, text: text)
-            .textFieldStyle(.roundedBorder)
-            .textContentType(.none)
-            .autocorrectionDisabled()
-    }
-
-    private func settingsSecureField(_ label: String, text: Binding<String>) -> some View {
-        SecureField(label, text: text)
-            .textFieldStyle(.roundedBorder)
-            .textContentType(.none)
-    }
-
-    private func settingsPicker<Content: View>(
-        _ label: String,
-        selection: Binding<String>,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        HStack {
-            Text(label)
-                .frame(width: 40, alignment: .leading)
-            Picker("", selection: selection) {
-                content()
-            }
-            .pickerStyle(.menu)
-            .frame(maxWidth: .infinity)
-        }
-    }
-
-    private func settingsToggle(_ label: String, isOn: Binding<Bool>) -> some View {
-        Toggle(label, isOn: isOn)
-            .toggleStyle(.switch)
-    }
-
-    private func testButton(state: TestState, label: String, disabled: Bool, action: @escaping () -> Void) -> some View {
-        HStack(spacing: 8) {
-            Button(action: action) {
-                HStack(spacing: 4) {
-                    if state == .testing {
-                        ProgressView()
-                            .controlSize(.mini)
-                    }
-                    Text(state == .testing ? "测试中..." : label)
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(disabled || state == .testing)
-
-            switch state {
-            case .success(let msg):
-                Label(msg, systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            case .failure(let msg):
-                Label(msg, systemImage: "xmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-            default:
-                EmptyView()
-            }
         }
     }
 
@@ -348,7 +339,6 @@ struct SettingsView: View {
                 guard parts.count == 2 else { continue }
                 let key = String(parts[0]).trimmingCharacters(in: .whitespaces)
                 var value = String(parts[1]).trimmingCharacters(in: .whitespaces)
-                // 去掉引号
                 if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
                     (value.hasPrefix("'") && value.hasSuffix("'")) {
                     value = String(value.dropFirst().dropLast())
@@ -377,7 +367,6 @@ struct SettingsView: View {
         state.imageModel = imageModel
         state.defaultAuthor = defaultAuthor
 
-        // 同步作者：如果作者为空或等于旧的默认值，则更新为新的默认作者/用户名
         let fallbackAuthor = defaultAuthor.isEmpty ? username : defaultAuthor
         if state.author.isEmpty || state.author == state.defaultAuthor || state.author == state.username {
             state.author = fallbackAuthor
@@ -398,4 +387,224 @@ enum TestState: Equatable {
     case testing
     case success(String)
     case failure(String)
+}
+
+// MARK: - Settings Components
+
+struct TabButton: View {
+    let title: String
+    let icon: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(isSelected ? .white : .secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(
+                isSelected
+                    ? AnyShapeStyle(LinearGradient(
+                        colors: [Color(hue: 0.72, saturation: 0.65, brightness: 0.95),
+                                 Color(hue: 0.58, saturation: 0.70, brightness: 0.90)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing))
+                    : AnyShapeStyle(Color.clear),
+                in: RoundedRectangle(cornerRadius: 7)
+            )
+            .background(
+                !isSelected
+                    ? AnyShapeStyle(Color.primary.opacity(0.04))
+                    : AnyShapeStyle(Color.clear),
+                in: RoundedRectangle(cornerRadius: 7)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct SettingsCard<Content: View>: View {
+    let title: String
+    let icon: String
+    let color: Color
+    var badge: String? = nil
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 12))
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.8))
+
+                if let badge {
+                    Text(badge)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.quaternary.opacity(0.5), in: Capsule())
+                }
+            }
+
+            content
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .shadow(color: .black.opacity(0.04), radius: 4, y: 2)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+        )
+    }
+}
+
+struct SettingsTextField: View {
+    let label: String
+    @Binding var text: String
+    var placeholder: String?
+
+    init(_ label: String, text: Binding<String>, placeholder: String? = nil) {
+        self.label = label
+        self._text = text
+        self.placeholder = placeholder
+    }
+
+    var body: some View {
+        TextField(placeholder ?? label, text: $text)
+            .textFieldStyle(.plain)
+            .font(.system(size: 13))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color(nsColor: .textBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            )
+            .textContentType(.none)
+            .autocorrectionDisabled()
+    }
+}
+
+struct SettingsSecureField: View {
+    let label: String
+    @Binding var text: String
+
+    init(_ label: String, text: Binding<String>) {
+        self.label = label
+        self._text = text
+    }
+
+    var body: some View {
+        SecureField(label, text: $text)
+            .textFieldStyle(.plain)
+            .font(.system(size: 13))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color(nsColor: .textBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            )
+            .textContentType(.none)
+    }
+}
+
+struct SettingsPickerField<Content: View>: View {
+    let label: String
+    @Binding var selection: String
+    @ViewBuilder let content: Content
+
+    init(_ label: String, selection: Binding<String>, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self._selection = selection
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(width: 40, alignment: .leading)
+            Picker("", selection: $selection) {
+                content
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+struct SettingsTestButton: View {
+    let state: TestState
+    let label: String
+    let disabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: action) {
+                HStack(spacing: 5) {
+                    if state == .testing {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 8))
+                    }
+                    Text(state == .testing ? "测试中..." : label)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled || state == .testing)
+
+            switch state {
+            case .success(let msg):
+                HStack(spacing: 3) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                    Text(msg)
+                        .font(.system(size: 10))
+                }
+                .foregroundStyle(.green)
+                .transition(.scale.combined(with: .opacity))
+            case .failure(let msg):
+                HStack(spacing: 3) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                    Text(msg)
+                        .font(.system(size: 10))
+                }
+                .foregroundStyle(.red)
+                .lineLimit(2)
+                .transition(.scale.combined(with: .opacity))
+            default:
+                EmptyView()
+            }
+        }
+        .animation(.snappy(duration: 0.3), value: state == .testing)
+    }
 }
