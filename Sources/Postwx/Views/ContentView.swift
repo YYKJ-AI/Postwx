@@ -141,12 +141,12 @@ struct ContentView: View {
 
             Divider()
 
-            // Claude 状态
+            // AI 状态
             HStack(spacing: 4) {
                 Circle()
-                    .fill(ClaudeService.isAvailable(state: state) ? .green : .orange)
+                    .fill(AIService.isAvailable() ? .green : .orange)
                     .frame(width: 6, height: 6)
-                Text(ClaudeService.isAvailable(state: state) ? "Claude 已连接" : "Claude 未配置")
+                Text(AIService.isAvailable() ? "Claude AI 已就绪" : "Claude CLI 未安装")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -243,50 +243,34 @@ struct ContentView: View {
                 var title = state.title
                 var summary = state.summary
 
-                // Claude AI 处理（如果配置了 Claude API Key）
-                let claudeAvailable = ClaudeService.isAvailable(state: state)
-                if claudeAvailable {
-                    let claudeConfig = ClaudeService.config(from: state)
-
+                // AI 处理（通过本地 claude CLI，复用系统认证）
+                if AIService.isAvailable() {
                     // 自动提取标题
                     if title.isEmpty {
                         state.publishProgress = .detectingInput
-                        title = try await ClaudeService.generateTitle(config: claudeConfig, content: content)
+                        title = try await AIService.generateTitle(content: content)
                         state.title = title
                     }
 
                     // 去 AI 味
                     state.publishProgress = .deAI
-                    content = try await ClaudeService.deAI(config: claudeConfig, content: content)
+                    content = try await AIService.deAI(content: content)
                     state.content = content
 
                     // 自动生成摘要
                     if summary.isEmpty {
                         state.publishProgress = .adaptingRole
-                        summary = try await ClaudeService.generateSummary(config: claudeConfig, content: content, title: title)
+                        summary = try await AIService.generateSummary(content: content, title: title)
                         state.summary = summary
                     }
                 }
 
-                // 保存内容到临时文件
+                // 保存内容到临时文件（AI 处理后内容已更新）
                 state.publishProgress = .loadingPrefs
-                let filePath: String
-                if let url = droppedFileURL {
-                    // 如果内容被 Claude 处理过，写回临时文件
-                    if claudeAvailable {
-                        filePath = PublishService.saveTempMarkdown(
-                            content: content,
-                            title: title
-                        )
-                    } else {
-                        filePath = url.path
-                    }
-                } else {
-                    filePath = PublishService.saveTempMarkdown(
-                        content: content,
-                        title: title
-                    )
-                }
+                let filePath = PublishService.saveTempMarkdown(
+                    content: content,
+                    title: title
+                )
 
                 state.publishProgress = .publishing
 
@@ -337,9 +321,6 @@ struct ContentView: View {
         state.imageApiBase = defaults.string(forKey: "imageApiBase") ?? ""
         state.imageApiKey = defaults.string(forKey: "imageApiKey") ?? ""
         state.imageModel = defaults.string(forKey: "imageModel") ?? ""
-        state.claudeApiBase = defaults.string(forKey: "claudeApiBase") ?? ""
-        state.claudeApiKey = defaults.string(forKey: "claudeApiKey") ?? ""
-        state.claudeModel = defaults.string(forKey: "claudeModel") ?? ""
         state.defaultAuthor = defaults.string(forKey: "defaultAuthor") ?? ""
     }
 }

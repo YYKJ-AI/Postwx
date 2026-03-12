@@ -10,9 +10,6 @@ struct SettingsView: View {
     @AppStorage("imageApiBase") private var imageApiBase = ""
     @AppStorage("imageApiKey") private var imageApiKey = ""
     @AppStorage("imageModel") private var imageModel = ""
-    @AppStorage("claudeApiBase") private var claudeApiBase = ""
-    @AppStorage("claudeApiKey") private var claudeApiKey = ""
-    @AppStorage("claudeModel") private var claudeModel = ""
     @AppStorage("creatorRole") private var creatorRole = "tech-blogger"
     @AppStorage("writingStyle") private var writingStyle = "professional"
     @AppStorage("targetAudience") private var targetAudience = "general"
@@ -124,25 +121,37 @@ struct SettingsView: View {
 
                 Divider()
 
-                // Claude AI 润色
-                sectionHeader("Claude AI（可选）")
+                // Claude Code AI
+                sectionHeader("AI 润色")
 
-                VStack(spacing: 10) {
-                    settingsTextField("API Base URL", text: $claudeApiBase, placeholder: "https://api.anthropic.com")
-                    settingsSecureField("API Key", text: $claudeApiKey)
-                    settingsTextField("模型", text: $claudeModel, placeholder: "claude-sonnet-4-20250514")
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(AIService.isAvailable() ? .green : .orange)
+                        .frame(width: 8, height: 8)
+                    Text(AIService.isAvailable()
+                         ? "Claude Code 已就绪（复用系统认证）"
+                         : "未检测到 claude CLI，请先安装 Claude Code")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
-                Text("用于自动去 AI 味、生成摘要和标题")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                if AIService.isAvailable() {
+                    Text("自动使用系统级 Claude Code 认证，无需额外配置 API Key")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
 
-                testButton(
-                    state: claudeTestState,
-                    label: "测试连接",
-                    disabled: claudeApiKey.isEmpty
-                ) {
-                    testClaude()
+                    testButton(
+                        state: claudeTestState,
+                        label: "测试 AI",
+                        disabled: false
+                    ) {
+                        testClaude()
+                    }
+                } else {
+                    Text("安装：npm install -g @anthropic-ai/claude-code")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
                 }
 
                 Divider()
@@ -302,14 +311,10 @@ struct SettingsView: View {
         claudeTestState = .testing
         Task {
             do {
-                let msg = try await ClaudeService.testConnection(
-                    apiBase: claudeApiBase,
-                    apiKey: claudeApiKey,
-                    model: claudeModel
-                )
+                let msg = try await AIService.testConnection()
                 claudeTestState = .success(msg)
             } catch {
-                claudeTestState = .failure(friendlyNetworkError(error))
+                claudeTestState = .failure(error.localizedDescription)
             }
         }
     }
@@ -355,9 +360,6 @@ struct SettingsView: View {
                 case "IMAGE_API_KEY": imageApiKey = value
                 case "IMAGE_API_BASE": imageApiBase = value
                 case "IMAGE_MODEL": imageModel = value
-                case "CLAUDE_API_KEY", "ANTHROPIC_API_KEY": claudeApiKey = value
-                case "CLAUDE_API_BASE": claudeApiBase = value
-                case "CLAUDE_MODEL": claudeModel = value
                 default: break
                 }
             }
@@ -373,9 +375,6 @@ struct SettingsView: View {
         state.imageApiBase = imageApiBase
         state.imageApiKey = imageApiKey
         state.imageModel = imageModel
-        state.claudeApiBase = claudeApiBase
-        state.claudeApiKey = claudeApiKey
-        state.claudeModel = claudeModel
         state.defaultAuthor = defaultAuthor
     }
 }

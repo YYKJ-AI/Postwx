@@ -21,9 +21,6 @@ final class AppState {
     var imageApiBase: String = ""
     var imageApiKey: String = ""
     var imageModel: String = ""
-    var claudeApiBase: String = ""
-    var claudeApiKey: String = ""
-    var claudeModel: String = ""
 
     // MARK: - Preferences
 

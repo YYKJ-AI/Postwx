@@ -1,110 +1,127 @@
 import Foundation
 
-/// 调用 Claude API（Anthropic 或兼容服务）
-struct ClaudeService {
+/// 通过本地 claude CLI 调用 AI，复用系统级 Claude Code 认证
+struct AIService {
 
-    private static let defaultApiBase = "https://api.anthropic.com"
-    private static let defaultModel = "claude-sonnet-4-20250514"
+    /// claude CLI 的模型别名（sonnet 更快更便宜，适合这些轻量任务）
+    private static let defaultModel = "sonnet"
 
-    // MARK: - 凭证管理
+    // MARK: - 查找 claude CLI
 
-    struct Config {
-        var apiBase: String
-        var apiKey: String
-        var model: String
-
-        var resolvedBase: String {
-            let base = apiBase.isEmpty ? defaultApiBase : apiBase
-            var url = base.hasSuffix("/") ? String(base.dropLast()) : base
-            if !url.hasSuffix("/v1") {
-                url += "/v1"
-            }
-            return url
-        }
-
-        var resolvedModel: String {
-            model.isEmpty ? defaultModel : model
-        }
-    }
-
-    /// 从 AppState 获取配置
-    static func config(from state: AppState) -> Config {
-        Config(
-            apiBase: state.claudeApiBase,
-            apiKey: state.claudeApiKey,
-            model: state.claudeModel
-        )
-    }
-
-    /// 检查是否有可用凭证
-    static func isAvailable(state: AppState) -> Bool {
-        !state.claudeApiKey.isEmpty
-    }
-
-    // MARK: - 调用 Claude API
-
-    private static func callClaude(config: Config, system: String, userMessage: String) async throws -> String {
-        guard !config.apiKey.isEmpty else {
-            throw ClaudeError.noCredentials
-        }
-
-        let urlStr = "\(config.resolvedBase)/messages"
-        guard let url = URL(string: urlStr) else {
-            throw ClaudeError.requestFailed("无效的 API URL: \(urlStr)")
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        request.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
-
-        let body: [String: Any] = [
-            "model": config.resolvedModel,
-            "max_tokens": 4096,
-            "system": system,
-            "messages": [
-                ["role": "user", "content": userMessage],
-            ],
+    private static func findCLI() -> String? {
+        let candidates = [
+            "/opt/homebrew/bin/claude",
+            "/opt/homebrew/Caskroom/miniconda/base/bin/claude",
+            "/usr/local/bin/claude",
+            NSHomeDirectory() + "/.claude/local/claude",
         ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        for path in candidates {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        // 尝试 which
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["which", "claude"]
+        process.environment = ProcessInfo.processInfo.environment
+        // 清除嵌套检测
+        process.environment?["CLAUDECODE"] = nil
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return path.isEmpty ? nil : path
+    }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+    /// 检查 claude CLI 是否可用
+    static func isAvailable() -> Bool {
+        findCLI() != nil
+    }
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw ClaudeError.requestFailed("无效的响应")
+    // MARK: - 调用 claude CLI
+
+    private static func callClaude(system: String, userMessage: String, model: String? = nil) async throws -> String {
+        guard let cliPath = findCLI() else {
+            throw AIError.cliNotFound
         }
 
-        if httpResponse.statusCode != 200 {
-            throw ClaudeError.requestFailed(friendlyError(httpResponse.statusCode, data: data))
-        }
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: cliPath)
+                    process.arguments = [
+                        "-p",
+                        "--output-format", "json",
+                        "--model", model ?? defaultModel,
+                        "--system-prompt", system,
+                        "--no-session-persistence",
+                        userMessage,
+                    ]
 
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = json["content"] as? [[String: Any]],
-              let first = content.first,
-              let text = first["text"] as? String
-        else {
-            throw ClaudeError.requestFailed("无法解析 Claude 响应")
-        }
+                    // 继承用户环境，但清除嵌套检测标记
+                    var env = ProcessInfo.processInfo.environment
+                    env["CLAUDECODE"] = nil
+                    process.environment = env
 
-        return text
+                    let stdout = Pipe()
+                    let stderr = Pipe()
+                    process.standardOutput = stdout
+                    process.standardError = stderr
+
+                    try process.run()
+                    process.waitUntilExit()
+
+                    let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+
+                    if process.terminationStatus != 0 {
+                        let errText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                        let outText = String(data: outData, encoding: .utf8) ?? ""
+                        continuation.resume(throwing: AIError.requestFailed(
+                            errText.isEmpty ? outText.prefix(300).description : errText.prefix(300).description
+                        ))
+                        return
+                    }
+
+                    // 解析 JSON 输出: { "result": "..." }
+                    guard let json = try? JSONSerialization.jsonObject(with: outData) as? [String: Any],
+                          let result = json["result"] as? String
+                    else {
+                        // 可能是纯文本输出
+                        let text = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        if text.isEmpty {
+                            continuation.resume(throwing: AIError.requestFailed("Claude CLI 返回空结果"))
+                        } else {
+                            continuation.resume(returning: text)
+                        }
+                        return
+                    }
+
+                    continuation.resume(returning: result.trimmingCharacters(in: .whitespacesAndNewlines))
+                } catch {
+                    continuation.resume(throwing: AIError.requestFailed("启动 Claude CLI 失败：\(error.localizedDescription)"))
+                }
+            }
+        }
     }
 
     // MARK: - 测试连接
 
-    static func testConnection(apiBase: String, apiKey: String, model: String) async throws -> String {
-        let config = Config(apiBase: apiBase, apiKey: apiKey, model: model)
-        _ = try await callClaude(
-            config: config,
+    static func testConnection() async throws -> String {
+        let result = try await callClaude(
             system: "回复[连接成功]四个字即可。",
             userMessage: "测试"
         )
-        return "连接成功（模型: \(config.resolvedModel)）"
+        return "连接成功：\(result)"
     }
 
     // MARK: - 去 AI 味
 
-    static func deAI(config: Config, content: String) async throws -> String {
+    static func deAI(content: String) async throws -> String {
         let system = """
         你是一位资深中文编辑。你的任务是将 AI 生成的文章润色为自然、地道的人类写作风格。
 
@@ -117,12 +134,12 @@ struct ClaudeService {
         6. 只输出润色后的全文，不要任何解释
         """
 
-        return try await callClaude(config: config, system: system, userMessage: content)
+        return try await callClaude(system: system, userMessage: content)
     }
 
     // MARK: - 生成摘要
 
-    static func generateSummary(config: Config, content: String, title: String) async throws -> String {
+    static func generateSummary(content: String, title: String) async throws -> String {
         let system = """
         你是一位公众号编辑。根据文章内容生成一句简短的摘要，用于微信公众号文章的摘要/描述字段。
 
@@ -134,12 +151,12 @@ struct ClaudeService {
         """
 
         let userMsg = "标题：\(title)\n\n文章内容：\n\(String(content.prefix(3000)))"
-        return try await callClaude(config: config, system: system, userMessage: userMsg)
+        return try await callClaude(system: system, userMessage: userMsg)
     }
 
     // MARK: - 自动提取/优化标题
 
-    static func generateTitle(config: Config, content: String) async throws -> String {
+    static func generateTitle(content: String) async throws -> String {
         let system = """
         你是一位公众号编辑。根据文章内容生成一个吸引人的标题。
 
@@ -151,35 +168,20 @@ struct ClaudeService {
         """
 
         let userMsg = "文章内容：\n\(String(content.prefix(3000)))"
-        return try await callClaude(config: config, system: system, userMessage: userMsg)
-    }
-
-    // MARK: - 错误映射
-
-    private static func friendlyError(_ statusCode: Int, data: Data) -> String {
-        switch statusCode {
-        case 401: return "API Key 无效，请检查后重新输入"
-        case 403: return "API Key 权限不足"
-        case 429: return "请求过于频繁，请稍后再试"
-        case 404: return "API 地址不正确，请检查 Base URL"
-        case 500...599: return "Claude 服务暂时不可用，请稍后再试"
-        default:
-            let errText = String(data: data, encoding: .utf8) ?? ""
-            return "HTTP \(statusCode): \(errText.prefix(200))"
-        }
+        return try await callClaude(system: system, userMessage: userMsg)
     }
 }
 
 // MARK: - Errors
 
-enum ClaudeError: LocalizedError {
-    case noCredentials
+enum AIError: LocalizedError {
+    case cliNotFound
     case requestFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .noCredentials: "未配置 Claude API Key，请在设置中填写"
-        case .requestFailed(let msg): "Claude API 错误：\(msg)"
+        case .cliNotFound: "未找到 claude CLI，请先安装 Claude Code（npm install -g @anthropic-ai/claude-code）"
+        case .requestFailed(let msg): "AI 调用失败：\(msg)"
         }
     }
 }
