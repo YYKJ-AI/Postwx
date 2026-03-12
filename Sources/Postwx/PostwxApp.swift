@@ -1,9 +1,6 @@
 import SwiftUI
 import AppKit
 
-/// SPM 构建的 macOS 应用默认以 accessory（后台）模式启动，
-/// 必须通过 NSApplicationDelegate 将激活策略设为 .regular，
-/// 否则窗口无法获得键盘焦点，TextField 无法输入。
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -24,10 +21,9 @@ struct PostwxApp: App {
                     SettingsView()
                 }
         }
-        .windowStyle(.titleBar)
-        .defaultSize(width: 700, height: 560)
+        .windowToolbarStyle(.unified)
+        .defaultSize(width: 880, height: 640)
         .commands {
-            // 标准 Edit 菜单 — 没有这个，TextField 无法接收键盘输入
             CommandGroup(replacing: .textEditing) {
                 Button("剪切") { NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) }
                     .keyboardShortcut("x")
