@@ -9,6 +9,8 @@ node_modules/
 # 编译输出
 dist/
 build/
+.build/
+.swiftpm/
 *.js.map
 
 # 系统文件
