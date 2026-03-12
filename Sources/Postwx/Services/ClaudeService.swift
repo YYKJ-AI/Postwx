@@ -25,7 +25,6 @@ struct AIService {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["which", "claude"]
         process.environment = ProcessInfo.processInfo.environment
-        // 清除嵌套检测
         process.environment?["CLAUDECODE"] = nil
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -63,7 +62,6 @@ struct AIService {
                         userMessage,
                     ]
 
-                    // 继承用户环境，但清除嵌套检测标记
                     var env = ProcessInfo.processInfo.environment
                     env["CLAUDECODE"] = nil
                     process.environment = env
@@ -91,7 +89,6 @@ struct AIService {
                     guard let json = try? JSONSerialization.jsonObject(with: outData) as? [String: Any],
                           let result = json["result"] as? String
                     else {
-                        // 可能是纯文本输出
                         let text = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                         if text.isEmpty {
                             continuation.resume(throwing: AIError.requestFailed("Claude CLI 返回空结果"))
@@ -119,42 +116,241 @@ struct AIService {
         return "连接成功：\(result)"
     }
 
-    // MARK: - 去 AI 味
+    // MARK: - Step 2: 角色适配
 
-    static func deAI(content: String) async throws -> String {
+    static func adaptRole(
+        content: String,
+        role: CreatorRole,
+        style: WritingStyle,
+        audience: TargetAudience
+    ) async throws -> String {
         let system = """
-        你是一位资深中文编辑。你的任务是将 AI 生成的文章润色为自然、地道的人类写作风格。
+        你是一位资深内容编辑，负责根据创作者角色、写作风格和目标受众对文章进行适配调整。
 
-        规则：
-        1. 去除 AI 写作的典型特征：过度使用"首先/其次/最后"、"值得注意的是"、"总而言之"等套话
-        2. 减少不必要的修饰词和冗余表达
-        3. 让语言更简洁、直接、有个性
-        4. 保持原文的核心信息和结构不变
-        5. 保留所有 Markdown 格式标记
-        6. 只输出润色后的全文，不要任何解释
+        ## 创作者角色：\(role.displayName)
+        适配方式：\(role.adaptationGuide)
+
+        ## 写作风格：\(style.displayName)
+        适配方式：\(style.adaptationGuide)
+
+        ## 目标受众：\(audience.displayName)
+        适配方式：\(audience.adaptationGuide)
+
+        ## 规则
+        1. 保持原文核心信息和结构不变
+        2. 根据角色调整专业深度和表达方式
+        3. 根据风格调整语气和措辞
+        4. 根据受众调整术语使用和解释深度
+        5. 保留所有 Markdown 格式标记（标题、列表、代码块、链接等）
+        6. 保留所有图片标记（包括 __generate: 占位符）
+        7. 只输出适配后的全文，不要任何解释或前言
         """
 
         return try await callClaude(system: system, userMessage: content)
     }
 
-    // MARK: - 生成摘要
+    // MARK: - Step 3: 去 AI 味（增强版，24 种模式检测 + 五维评分）
 
-    static func generateSummary(content: String, title: String) async throws -> String {
+    static func deAI(content: String, writingStyle: WritingStyle) async throws -> DeAIResult {
         let system = """
-        你是一位公众号编辑。根据文章内容生成一句简短的摘要，用于微信公众号文章的摘要/描述字段。
+        你是一位资深中文编辑。任务：将文章润色为自然、地道的人类写作风格，检测并修正 AI 写作痕迹。
 
-        规则：
-        1. 一句话概括文章核心内容，吸引读者点击
-        2. 控制在 60 字以内
-        3. 语言自然，不要用 AI 腔调
-        4. 只输出摘要文本，不要任何标点符号以外的额外内容
+        ## 24 种 AI 痕迹检测清单
+
+        【内容模式 1-6】
+        1. 过度强调意义/遗产 → 简化为客观陈述
+        2. 过度强调知名度 → 去除不必要修饰
+        3. 以-ing 肤浅分析（引领着、推动着）→ 用具体动词替代
+        4. 宣传/广告式语言（革命性的、颠覆性的）→ 替换为中性描述
+        5. 模糊归因（据专家表示、研究表明）→ 补充来源或删除
+        6. 公式化总结（挑战与机遇并存）→ 用具体结论替代
+
+        【语言模式 7-12】
+        7. AI 高频词（至关重要、深入探讨、赋能、助力）→ 替换日常用语
+        8. 系动词回避（作为…的存在）→ 恢复自然"是"字句
+        9. 否定式排比（不仅…而且…更是…）→ 简化直接陈述
+        10. 三段式过度使用 → 打破固定结构
+        11. 刻意换词（同概念反复换词指代）→ 统一用词
+        12. 虚假范围（从…到…，从…到…）→ 聚焦具体点
+
+        【风格模式 13-16】
+        13. 破折号过度 → 保留关键，简化其余
+        14. 粗体过度 → 仅保留核心关键词
+        15. 正文列表化 → 恢复段落叙述
+        16. 表情符号装饰 → 去除
+
+        【填充词 17-20】
+        17. 填充短语（为了实现这一目标、在当今时代）→ 删除
+        18. 过度限定（在某种程度上来说）→ 简化/删除
+        19. 通用积极结论（总之，未来可期）→ 具体结论替代
+        20. 绕圈回避 → 直接表述
+
+        【交流痕迹 21-24】
+        21. 协作痕迹（希望对您有帮助）→ 删除
+        22. 截止免责（截至我所知…）→ 删除
+        23. 谄媚语气（非常好的问题）→ 删除
+        24. 交流特征（让我来为您解释）→ 删除
+
+        ## 写作风格参考：\(writingStyle.displayName)
+        \(writingStyle.adaptationGuide)
+
+        ## 输出格式
+        先输出润色后的全文，然后在最后一行输出评分，格式如下：
+        <!--SCORE:直接性=X,节奏感=X,信任度=X,真实性=X,精炼度=X,总分=XX,评级=优秀/良好/需修订-->
+
+        五维评分标准（每项满分 10 分）：
+        - 直接性：10=直截了当，1=铺垫绕圈
+        - 节奏感：10=长短交错，1=机械等长
+        - 信任度：10=简洁尊重读者，1=过度解释
+        - 真实性：10=像真人说话，1=机械生硬
+        - 精炼度：10=无冗余，1=大量废话
+        评级：45-50 优秀 | 35-44 良好 | <35 需修订
+
+        ## 规则
+        1. 保留所有 Markdown 格式标记
+        2. 保留所有图片标记（包括 __generate: 占位符）
+        3. 先输出完整润色后全文，最后一行输出 <!--SCORE:...--> 评分
         """
 
-        let userMsg = "标题：\(title)\n\n文章内容：\n\(String(content.prefix(3000)))"
-        return try await callClaude(system: system, userMessage: userMsg)
+        let raw = try await callClaude(system: system, userMessage: content)
+
+        // 解析评分
+        var processedContent = raw
+        var score: Int?
+        var rating: String?
+
+        if let scoreRange = raw.range(of: "<!--SCORE:", options: .backwards),
+           let endRange = raw.range(of: "-->", range: scoreRange.upperBound..<raw.endIndex) {
+            let scoreLine = String(raw[scoreRange.upperBound..<endRange.lowerBound])
+            processedContent = String(raw[raw.startIndex..<scoreRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // 提取总分
+            if let totalMatch = scoreLine.range(of: "总分=") {
+                let afterTotal = scoreLine[totalMatch.upperBound...]
+                let digits = afterTotal.prefix(while: { $0.isNumber })
+                score = Int(digits)
+            }
+
+            // 提取评级
+            if let ratingMatch = scoreLine.range(of: "评级=") {
+                let afterRating = scoreLine[ratingMatch.upperBound...]
+                rating = String(afterRating.prefix(while: { $0 != "," && $0 != "-" }))
+            }
+        }
+
+        return DeAIResult(
+            content: processedContent,
+            score: score,
+            rating: rating
+        )
     }
 
-    // MARK: - 自动提取/优化标题
+    // MARK: - Step 4: 智能选择主题配色
+
+    static func selectTheme(content: String, role: CreatorRole) async throws -> ThemeSelection {
+        let system = """
+        你是一位微信公众号排版专家。根据文章内容和创作者角色，选择最合适的主题和配色。
+
+        ## 可选主题（4 种）
+        - default: 通用默认，适合技术/编程/科普
+        - grace: 优雅柔和，适合生活/情感/设计/创意
+        - simple: 简洁清爽，适合教程/教育
+        - modern: 现代商务，适合商业/分析
+
+        ## 可选配色（13 种）
+        blue, green, vermilion, yellow, purple, sky, rose, olive, black, gray, pink, red, orange
+
+        ## 文章类型参考
+        技术/编程 → default + blue
+        生活/情感 → grace + purple 或 rose
+        教程/教育 → simple + green
+        商业/分析 → modern + orange 或 black
+        设计/创意 → grace + vermilion 或 pink
+        科普/知识 → default + sky 或 green
+
+        ## 创作者角色：\(role.displayName)
+
+        ## 输出格式（严格 JSON，不要其他内容）
+        {"theme":"主题名","color":"配色名","reason":"一句话理由"}
+        """
+
+        let raw = try await callClaude(
+            system: system,
+            userMessage: "请分析以下文章并选择主题配色：\n\n\(String(content.prefix(2000)))"
+        )
+
+        // 提取 JSON
+        guard let jsonData = extractJSON(from: raw),
+              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: String],
+              let theme = json["theme"],
+              let color = json["color"]
+        else {
+            return ThemeSelection(theme: .default_, color: .blue, reason: "默认配色")
+        }
+
+        let selectedTheme = Theme.allCases.first { $0.rawValue == theme } ?? .default_
+        let selectedColor = ThemeColor.allCases.first { $0.rawValue == color } ?? .blue
+
+        return ThemeSelection(
+            theme: selectedTheme,
+            color: selectedColor,
+            reason: json["reason"] ?? ""
+        )
+    }
+
+    // MARK: - Step 5: AI 配图分析
+
+    static func analyzeImages(content: String, title: String) async throws -> [ImageSuggestion] {
+        let system = """
+        你是一位公众号配图专家。分析文章内容，决定是否需要插图，如果需要则生成图片提示词。
+
+        ## 6 种图片风格
+        1. vector: 技术文章、教程、知识科普 — Cream底#F5F0E6, Coral#E07A5F, Mint#81B29A, Mustard#F2CC8F
+        2. watercolor: 生活方式、旅行、情感散文 — Earth色系, 柔和边缘
+        3. minimal: 观点文章、深度思考 — 黑白#000/#374151, 白底, 60%+留白
+        4. warm: 个人故事、成长感悟 — Cream底#FFFAF0, Orange#ED8936, Golden#F6AD55
+        5. blueprint: API文档、系统设计 — Off-White底#FAF8F5, Blue#2563EB, Navy
+        6. notion: 产品指南、工具教程 — 白底, 黑#1A1A1A, 淡蓝/淡黄/淡粉点缀
+
+        ## 提示词模板
+        [风格描述]. [主题内容]. [构图要求]. [色彩方案]. Clean composition with generous white space. Human figures: simplified stylized silhouettes, not photorealistic.
+
+        ## 输出格式（严格 JSON 数组，不要其他内容）
+        如果文章不需要插图，返回 []
+        如果需要，返回：
+        [{"position":"after_paragraph_N","alt":"图片描述","prompt":"英文提示词","style":"风格名"}]
+
+        position 说明：after_paragraph_N 表示插入在第 N 段之后（从 1 开始计数）
+        建议：短文（<800字）最多 1 张，中文（800-2000字）最多 2 张，长文可 3 张
+        不要为每段都加图，只在关键转折或概念切换处加图。
+        """
+
+        let raw = try await callClaude(
+            system: system,
+            userMessage: "标题：\(title)\n\n文章内容：\n\(String(content.prefix(3000)))"
+        )
+
+        guard let jsonData = extractJSON(from: raw),
+              let arr = try? JSONSerialization.jsonObject(with: jsonData) as? [[String: String]]
+        else {
+            return []
+        }
+
+        return arr.compactMap { dict in
+            guard let position = dict["position"],
+                  let alt = dict["alt"],
+                  let prompt = dict["prompt"]
+            else { return nil }
+            return ImageSuggestion(
+                position: position,
+                alt: alt,
+                prompt: prompt,
+                style: dict["style"] ?? "vector"
+            )
+        }
+    }
+
+    // MARK: - 生成标题
 
     static func generateTitle(content: String) async throws -> String {
         let system = """
@@ -170,6 +366,73 @@ struct AIService {
         let userMsg = "文章内容：\n\(String(content.prefix(3000)))"
         return try await callClaude(system: system, userMessage: userMsg)
     }
+
+    // MARK: - 生成摘要
+
+    static func generateSummary(content: String, title: String) async throws -> String {
+        let system = """
+        你是一位公众号编辑。根据文章内容生成一句简短的摘要，用于微信公众号文章的摘要字段。
+
+        规则：
+        1. 一句话概括文章核心内容，吸引读者点击
+        2. 控制在 60 字以内
+        3. 语言自然，不要用 AI 腔调
+        4. 只输出摘要文本，不要任何额外内容
+        """
+
+        let userMsg = "标题：\(title)\n\n文章内容：\n\(String(content.prefix(3000)))"
+        return try await callClaude(system: system, userMessage: userMsg)
+    }
+
+    // MARK: - Helpers
+
+    private static func extractJSON(from text: String) -> Data? {
+        // 尝试直接解析
+        if let data = text.data(using: .utf8),
+           (try? JSONSerialization.jsonObject(with: data)) != nil {
+            return data
+        }
+        // 尝试提取 ```json ... ``` 代码块
+        if let start = text.range(of: "```json"),
+           let end = text.range(of: "```", range: start.upperBound..<text.endIndex) {
+            let json = String(text[start.upperBound..<end.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return json.data(using: .utf8)
+        }
+        // 尝试提取 { } 或 [ ]
+        if let start = text.firstIndex(where: { $0 == "{" || $0 == "[" }) {
+            let opener: Character = text[start]
+            let closer: Character = opener == "{" ? "}" : "]"
+            if let end = text.lastIndex(of: closer) {
+                let json = String(text[start...end])
+                if let data = json.data(using: .utf8),
+                   (try? JSONSerialization.jsonObject(with: data)) != nil {
+                    return data
+                }
+            }
+        }
+        return nil
+    }
+}
+
+// MARK: - Result Types
+
+struct DeAIResult {
+    let content: String
+    let score: Int?
+    let rating: String?
+}
+
+struct ThemeSelection {
+    let theme: Theme
+    let color: ThemeColor
+    let reason: String
+}
+
+struct ImageSuggestion {
+    let position: String
+    let alt: String
+    let prompt: String
+    let style: String
 }
 
 // MARK: - Errors

@@ -4,7 +4,6 @@ struct PublishService {
     /// scripts 目录路径
     private static var scriptsDir: String {
         let executableURL = Bundle.main.executableURL ?? URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
-        // 开发时直接使用项目目录
         let projectDir = findProjectDir(from: executableURL)
         return projectDir + "/scripts"
     }
@@ -19,8 +18,52 @@ struct PublishService {
             }
             dir = dir.deletingLastPathComponent()
         }
-        // Fallback: 使用已知路径
         return "/Users/ziheng/Projects/Postwx"
+    }
+
+    // MARK: - 输入格式检测
+
+    static func detectInputFormat(content: String, fileURL: URL?) -> InputFormat {
+        // 优先根据文件扩展名判断
+        if let url = fileURL {
+            let ext = url.pathExtension.lowercased()
+            switch ext {
+            case "md", "markdown": return .markdown
+            case "html", "htm": return .html
+            case "txt": return .plainText
+            default: break
+            }
+        }
+
+        // 根据内容特征判断
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // HTML 检测：包含常见 HTML 标签
+        if trimmed.hasPrefix("<!DOCTYPE") || trimmed.hasPrefix("<html") ||
+           trimmed.contains("<body") || trimmed.contains("<div") {
+            return .html
+        }
+
+        // Markdown 检测：包含 Markdown 特征
+        let mdPatterns = [
+            "^#{1,6}\\s",     // 标题
+            "^\\*\\*",        // 粗体
+            "^-\\s",          // 列表
+            "^\\d+\\.\\s",    // 有序列表
+            "```",            // 代码块
+            "\\[.+\\]\\(.+\\)", // 链接
+            "!\\[",           // 图片
+            "^>\\s",          // 引用
+            "^---$",          // 分隔线/frontmatter
+        ]
+
+        for pattern in mdPatterns {
+            if trimmed.range(of: pattern, options: .regularExpression, range: trimmed.startIndex..<trimmed.endIndex) != nil {
+                return .markdown
+            }
+        }
+
+        return .plainText
     }
 
     // MARK: - 保存内容到临时 Markdown 文件
@@ -47,7 +90,32 @@ struct PublishService {
         return filePath
     }
 
-    // MARK: - 调用现有 TS 脚本发布
+    // MARK: - 插入 AI 配图占位符到 Markdown
+
+    static func insertImagePlaceholders(content: String, images: [ImageSuggestion]) -> String {
+        guard !images.isEmpty else { return content }
+
+        let paragraphs = content.components(separatedBy: "\n\n")
+        var result: [String] = []
+
+        for (index, paragraph) in paragraphs.enumerated() {
+            result.append(paragraph)
+
+            // 检查是否有图片需要插入在当前段落之后
+            let paragraphNumber = index + 1
+            for img in images {
+                if img.position == "after_paragraph_\(paragraphNumber)" {
+                    result.append("")
+                    result.append("![\(img.alt)](__generate:\(img.prompt)__)")
+                    result.append("")
+                }
+            }
+        }
+
+        return result.joined(separator: "\n\n")
+    }
+
+    // MARK: - 调用 TS 脚本发布
 
     struct Credentials {
         var wechatAppId: String
@@ -84,7 +152,6 @@ struct PublishService {
         process.arguments = args
         process.currentDirectoryURL = URL(fileURLWithPath: scriptsDir)
 
-        // 只从应用设置传入凭证，不读取 .env 文件
         var env = ProcessInfo.processInfo.environment
         env["WECHAT_APP_ID"] = credentials.wechatAppId
         env["WECHAT_APP_SECRET"] = credentials.wechatAppSecret
@@ -152,8 +219,6 @@ struct PublishService {
 
     static func testImageGeneration(apiBase: String, apiKey: String, model: String) async throws -> String {
         let base = normalizeApiBase(apiBase.isEmpty ? "https://api.tu-zi.com" : apiBase)
-
-        // 用 /models 接口验证连通性和 API Key，不实际生图，秒级完成
         let urlStr = "\(base)/models"
 
         guard let url = URL(string: urlStr) else {
@@ -183,7 +248,6 @@ struct PublishService {
             throw TestError.apiFailed(friendlyImageErrorMessage(message))
         }
 
-        // 检查目标模型是否可用
         let modelName = model.isEmpty ? "gpt-image-1" : model
         if let models = json["data"] as? [[String: Any]] {
             let ids = models.compactMap { $0["id"] as? String }
@@ -217,8 +281,6 @@ struct PublishService {
         }
     }
 
-    // MARK: - AI 配图错误映射
-
     private static func friendlyImageError(_ statusCode: Int) -> String {
         switch statusCode {
         case 401: "API Key 无效或已过期，请检查后重新输入"
@@ -245,7 +307,6 @@ struct PublishService {
 
     // MARK: - Helpers
 
-    /// 自动补全 API Base URL，确保以 /v1 结尾
     private static func normalizeApiBase(_ base: String) -> String {
         var url = base.hasSuffix("/") ? String(base.dropLast()) : base
         if !url.hasSuffix("/v1") {
@@ -254,7 +315,7 @@ struct PublishService {
         return url
     }
 
-    private static func generateSlug(from text: String) -> String {
+    static func generateSlug(from text: String) -> String {
         let words = text
             .lowercased()
             .components(separatedBy: .alphanumerics.inverted)
@@ -264,7 +325,6 @@ struct PublishService {
         let slug = words.joined(separator: "-")
         return slug.isEmpty ? "untitled" : slug
     }
-
 }
 
 enum TestError: LocalizedError {

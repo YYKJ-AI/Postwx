@@ -376,6 +376,12 @@ struct SettingsView: View {
         state.imageApiKey = imageApiKey
         state.imageModel = imageModel
         state.defaultAuthor = defaultAuthor
+
+        if let r = CreatorRole(rawValue: creatorRole) { state.creatorRole = r }
+        if let s = WritingStyle(rawValue: writingStyle) { state.writingStyle = s }
+        if let a = TargetAudience(rawValue: targetAudience) { state.targetAudience = a }
+        state.needOpenComment = needOpenComment
+        state.onlyFansCanComment = onlyFansCanComment
     }
 }
 

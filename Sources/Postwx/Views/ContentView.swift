@@ -6,25 +6,24 @@ struct ContentView: View {
     @State private var droppedFileURL: URL?
     @State private var showSettings = false
     @State private var publishError: String?
+    @State private var showOriginalContent = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部工具栏
             toolbar
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
 
             Divider()
 
-            // 主内容区
             HSplitView {
                 // 左侧：编辑区
                 editorPanel
                     .frame(minWidth: 300)
 
-                // 右侧：元数据 + 发布
-                sidePanel
-                    .frame(width: 220)
+                // 右侧：工作流面板
+                workflowPanel
+                    .frame(width: 260)
             }
         }
         .onAppear { loadCredentials() }
@@ -53,7 +52,32 @@ struct ContentView: View {
                 .font(.headline)
                 .foregroundStyle(.secondary)
 
+            // 工作流状态标签
+            if state.isReviewing {
+                Label("审核中", systemImage: "eye")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(.orange.opacity(0.1), in: Capsule())
+            } else if state.isProcessing {
+                Label("处理中", systemImage: "gearshape.2")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(.blue.opacity(0.1), in: Capsule())
+            }
+
             Spacer()
+
+            if state.isReviewing {
+                Button("查看原文") {
+                    showOriginalContent.toggle()
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
 
             Button {
                 openFile()
@@ -61,6 +85,7 @@ struct ContentView: View {
                 Label("打开文件", systemImage: "doc")
             }
             .buttonStyle(.borderless)
+            .disabled(state.isBusy)
 
             Button {
                 showSettings = true
@@ -71,13 +96,54 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Editor
+    // MARK: - Editor Panel
 
     private var editorPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if state.content.isEmpty {
+            if state.isReviewing && showOriginalContent {
+                // 审核模式：显示原文对比
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Text("原文内容（只读）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("关闭原文") { showOriginalContent = false }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+
+                    ScrollView {
+                        Text(state.originalContent)
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                    }
+                    .background(Color.yellow.opacity(0.05))
+                }
+            } else if state.content.isEmpty {
                 emptyState
             } else {
+                // 审核模式下编辑器标题
+                if state.isReviewing {
+                    HStack {
+                        Text("AI 处理后内容（可编辑）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if let score = state.deAIScore {
+                            Text("去AI味评分: \(score)/50")
+                                .font(.caption)
+                                .foregroundStyle(score >= 45 ? .green : score >= 35 ? .orange : .red)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                }
+
                 TextEditor(text: $state.content)
                     .font(.system(.body, design: .monospaced))
                     .scrollContentBackground(.hidden)
@@ -101,7 +167,6 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture {
-            // 点击后聚焦到编辑区
             state.content = " "
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 state.content = ""
@@ -109,89 +174,221 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Side Panel
+    // MARK: - Workflow Panel
 
-    private var sidePanel: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // 元数据
-            Group {
-                LabeledField("标题", text: $state.title, prompt: "自动提取")
-                LabeledField("作者", text: $state.author, prompt: state.defaultAuthor.isEmpty ? "可选" : state.defaultAuthor)
-                LabeledField("摘要", text: $state.summary, prompt: "自动生成", axis: .vertical)
-            }
+    private var workflowPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    // 元数据字段
+                    if !state.isProcessing {
+                        metadataFields
+                        Divider()
+                    }
 
-            Divider()
+                    // 工作流步骤指示器
+                    workflowSteps
+                        .padding(.vertical, 4)
 
-            // 主题选择
-            Group {
-                Picker("主题", selection: $state.selectedTheme) {
-                    ForEach(Theme.allCases) { t in
-                        Text(t.displayName).tag(t)
+                    // 主题配色（仅在审核模式可编辑）
+                    if state.isReviewing || state.workflowState == .idle {
+                        Divider()
+                        themeSection
+                    }
+
+                    // AI 状态
+                    if state.workflowState == .idle {
+                        Divider()
+                        aiStatusIndicator
+                    }
+
+                    // 完成状态
+                    if case .done(let mediaId) = state.workflowState {
+                        Divider()
+                        doneSection(mediaId: mediaId)
                     }
                 }
-                .pickerStyle(.menu)
+                .padding(16)
+            }
 
-                Picker("配色", selection: $state.selectedColor) {
-                    ForEach(ThemeColor.allCases) { c in
-                        Text(c.rawValue).tag(c)
+            Spacer(minLength: 0)
+
+            // 底部操作按钮
+            actionButtons
+                .padding(16)
+        }
+    }
+
+    // MARK: - Metadata Fields
+
+    private var metadataFields: some View {
+        Group {
+            LabeledField("标题", text: $state.title, prompt: "自动提取")
+                .disabled(state.isBusy)
+            LabeledField("作者", text: $state.author, prompt: state.defaultAuthor.isEmpty ? "可选" : state.defaultAuthor)
+                .disabled(state.isBusy)
+            LabeledField("摘要", text: $state.summary, prompt: "自动生成", axis: .vertical)
+                .disabled(state.isBusy)
+        }
+    }
+
+    // MARK: - Workflow Steps
+
+    private var workflowSteps: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("工作流")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 8)
+
+            ForEach(WorkflowStep.allCases) { step in
+                WorkflowStepRow(step: step, status: state.stepStatus(step))
+            }
+        }
+    }
+
+    // MARK: - Theme Section
+
+    private var themeSection: some View {
+        Group {
+            Text("主题配色")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("主题", selection: $state.selectedTheme) {
+                ForEach(Theme.allCases) { t in
+                    Text(t.displayName).tag(t)
+                }
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+
+            Picker("配色", selection: $state.selectedColor) {
+                ForEach(ThemeColor.allCases) { c in
+                    Text(c.rawValue).tag(c)
+                }
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+        }
+    }
+
+    // MARK: - AI Status
+
+    private var aiStatusIndicator: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(AIService.isAvailable() ? .green : .orange)
+                .frame(width: 6, height: 6)
+            Text(AIService.isAvailable() ? "Claude AI 已就绪" : "Claude CLI 未安装")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Done Section
+
+    private func doneSection(mediaId: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("发布成功", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.caption.weight(.medium))
+            Text("media_id: \(mediaId)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .textSelection(.enabled)
+                .lineLimit(2)
+        }
+    }
+
+    // MARK: - Action Buttons
+
+    private var actionButtons: some View {
+        VStack(spacing: 8) {
+            if state.isReviewing {
+                // 审核模式：确认发布 + 返回编辑
+                Button {
+                    confirmPublish()
+                } label: {
+                    HStack {
+                        Image(systemName: "paperplane.fill")
+                        Text("确认发布")
                     }
+                    .frame(maxWidth: .infinity)
                 }
-                .pickerStyle(.menu)
-            }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
 
-            Divider()
-
-            // AI 状态
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(AIService.isAvailable() ? .green : .orange)
-                    .frame(width: 6, height: 6)
-                Text(AIService.isAvailable() ? "Claude AI 已就绪" : "Claude CLI 未安装")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            // 发布状态
-            if state.isPublishing {
-                VStack(alignment: .leading, spacing: 6) {
+                Button("返回编辑") {
+                    cancelReview()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .frame(maxWidth: .infinity)
+            } else if state.isPublishing {
+                // 发布中
+                HStack {
                     ProgressView()
                         .controlSize(.small)
-                    Text(state.publishProgress.rawValue)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text("正在发布到草稿箱...")
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+            } else if case .done = state.workflowState {
+                // 完成
+                Button("新建文章") {
+                    resetAll()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .frame(maxWidth: .infinity)
+            } else if case .failed = state.workflowState {
+                // 失败
+                VStack(spacing: 6) {
+                    Button {
+                        startWorkflow()
+                    } label: {
+                        HStack {
+                            Image(systemName: "arrow.clockwise")
+                            Text("重试")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+
+                    Button("重置") {
+                        state.resetWorkflow()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity)
+                }
+            } else {
+                // 默认：开始处理
+                Button {
+                    startWorkflow()
+                } label: {
+                    HStack {
+                        if state.isProcessing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "wand.and.stars")
+                        }
+                        Text(state.isProcessing ? "处理中..." : "开始处理")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(state.content.isEmpty || state.isBusy || !state.hasCredentials)
+                .help(state.hasCredentials ? "" : "请先在设置中配置微信凭证")
             }
-
-            Spacer()
-
-            // 发布按钮
-            publishButton
         }
-        .padding(16)
     }
 
-    private var publishButton: some View {
-        Button {
-            publish()
-        } label: {
-            HStack {
-                if state.isPublishing {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: "paperplane.fill")
-                }
-                Text(state.isPublishing ? "发布中..." : "发布到草稿箱")
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .disabled(state.content.isEmpty || state.isPublishing || !state.hasCredentials)
-        .help(state.hasCredentials ? "" : "请先在设置中配置微信凭证")
-    }
-
-    // MARK: - Actions
+    // MARK: - File Actions
 
     private func openFile() {
         let panel = NSOpenPanel()
@@ -211,7 +408,6 @@ struct ContentView: View {
         state.content = content
         droppedFileURL = url
 
-        // 尝试从文件名提取标题
         if state.title.isEmpty {
             let filename = url.deletingPathExtension().lastPathComponent
             if filename != "index" && filename != "README" {
@@ -230,12 +426,16 @@ struct ContentView: View {
         return true
     }
 
-    private func publish() {
+    // MARK: - Workflow Execution
+
+    private func startWorkflow() {
         guard !state.content.isEmpty else { return }
 
-        state.isPublishing = true
-        state.publishProgress = .loadingPrefs
+        state.workflowState = .processing
+        state.stepStatuses = [:]
         state.publishLog = []
+        state.originalContent = state.content
+        showOriginalContent = false
 
         Task {
             do {
@@ -243,36 +443,165 @@ struct ContentView: View {
                 var title = state.title
                 var summary = state.summary
 
-                // AI 处理（通过本地 claude CLI，复用系统认证）
+                // ── Step 1: 输入检测 ──
+                state.updateStep(.inputDetection, status: .running)
+                let format = PublishService.detectInputFormat(
+                    content: content,
+                    fileURL: droppedFileURL
+                )
+                state.inputFormat = format
+                state.updateStep(.inputDetection, status: .completed(format.rawValue))
+
+                // HTML 直接跳到审核
+                if format == .html {
+                    state.updateStep(.roleAdaptation, status: .skipped("HTML 直接发布"))
+                    state.updateStep(.deAI, status: .skipped("HTML 直接发布"))
+                    state.updateStep(.themeSelection, status: .skipped("HTML 直接发布"))
+                    state.updateStep(.imageGeneration, status: .skipped("HTML 直接发布"))
+                    state.processedContent = content
+                    state.workflowState = .reviewing
+                    return
+                }
+
+                // AI 处理（需要 Claude CLI）
                 if AIService.isAvailable() {
+                    // ── Step 2: 角色适配 ──
+                    state.updateStep(.roleAdaptation, status: .running)
+                    do {
+                        content = try await AIService.adaptRole(
+                            content: content,
+                            role: state.creatorRole,
+                            style: state.writingStyle,
+                            audience: state.targetAudience
+                        )
+                        state.content = content
+                        state.updateStep(.roleAdaptation, status: .completed(
+                            "\(state.creatorRole.displayName) · \(state.writingStyle.displayName)"
+                        ))
+                    } catch {
+                        state.updateStep(.roleAdaptation, status: .failed(error.localizedDescription))
+                        // 角色适配失败不阻断流程
+                    }
+
+                    // ── Step 3: 去 AI 味 ──
+                    state.updateStep(.deAI, status: .running)
+                    do {
+                        let deAIResult = try await AIService.deAI(
+                            content: content,
+                            writingStyle: state.writingStyle
+                        )
+                        content = deAIResult.content
+                        state.content = content
+                        state.deAIScore = deAIResult.score
+                        state.deAIRating = deAIResult.rating
+
+                        let scoreText = deAIResult.score.map { "\($0)/50" } ?? ""
+                        let ratingText = deAIResult.rating ?? ""
+                        state.updateStep(.deAI, status: .completed(
+                            [scoreText, ratingText].filter { !$0.isEmpty }.joined(separator: " ")
+                        ))
+                    } catch {
+                        state.updateStep(.deAI, status: .failed(error.localizedDescription))
+                    }
+
                     // 自动提取标题
                     if title.isEmpty {
-                        state.publishProgress = .detectingInput
                         title = try await AIService.generateTitle(content: content)
                         state.title = title
                     }
 
-                    // 去 AI 味
-                    state.publishProgress = .deAI
-                    content = try await AIService.deAI(content: content)
-                    state.content = content
-
                     // 自动生成摘要
                     if summary.isEmpty {
-                        state.publishProgress = .adaptingRole
                         summary = try await AIService.generateSummary(content: content, title: title)
                         state.summary = summary
                     }
+
+                    // ── Step 4: 主题配色 ──
+                    state.updateStep(.themeSelection, status: .running)
+                    do {
+                        let themeResult = try await AIService.selectTheme(
+                            content: content,
+                            role: state.creatorRole
+                        )
+                        state.selectedTheme = themeResult.theme
+                        state.selectedColor = themeResult.color
+                        state.updateStep(.themeSelection, status: .completed(
+                            "\(themeResult.theme.displayName) · \(themeResult.color.rawValue)"
+                        ))
+                    } catch {
+                        state.updateStep(.themeSelection, status: .failed(error.localizedDescription))
+                    }
+
+                    // ── Step 5: AI 配图 ──
+                    if !state.imageApiKey.isEmpty {
+                        state.updateStep(.imageGeneration, status: .running)
+                        do {
+                            let images = try await AIService.analyzeImages(
+                                content: content,
+                                title: title
+                            )
+                            if images.isEmpty {
+                                state.updateStep(.imageGeneration, status: .completed("无需插图"))
+                            } else {
+                                content = PublishService.insertImagePlaceholders(
+                                    content: content,
+                                    images: images
+                                )
+                                state.content = content
+                                state.updateStep(.imageGeneration, status: .completed(
+                                    "已插入 \(images.count) 张配图提示"
+                                ))
+                            }
+                        } catch {
+                            state.updateStep(.imageGeneration, status: .failed(error.localizedDescription))
+                        }
+                    } else {
+                        state.updateStep(.imageGeneration, status: .skipped("未配置 IMAGE_API_KEY"))
+                    }
+                } else {
+                    // Claude CLI 不可用，跳过 AI 步骤
+                    state.updateStep(.roleAdaptation, status: .skipped("Claude CLI 未安装"))
+                    state.updateStep(.deAI, status: .skipped("Claude CLI 未安装"))
+                    state.updateStep(.themeSelection, status: .skipped("Claude CLI 未安装"))
+                    state.updateStep(.imageGeneration, status: .skipped("Claude CLI 未安装"))
                 }
 
-                // 保存内容到临时文件（AI 处理后内容已更新）
-                state.publishProgress = .loadingPrefs
-                let filePath = PublishService.saveTempMarkdown(
-                    content: content,
-                    title: title
-                )
+                // 进入审核模式
+                state.processedContent = content
+                state.updateStep(.publishing, status: .pending)
+                state.workflowState = .reviewing
 
-                state.publishProgress = .publishing
+            } catch {
+                state.workflowState = .failed(error.localizedDescription)
+                publishError = error.localizedDescription
+            }
+        }
+    }
+
+    private func confirmPublish() {
+        state.workflowState = .publishing
+        state.updateStep(.publishing, status: .running)
+
+        Task {
+            do {
+                let content = state.content
+                let title = state.title
+                let summary = state.summary
+                let format = state.inputFormat
+
+                // 保存临时文件（HTML 格式直接使用）
+                let filePath: String
+                if format == .html {
+                    let dir = "/tmp/postwx/\(formattedDate())"
+                    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                    filePath = "\(dir)/\(PublishService.generateSlug(from: title)).html"
+                    try? content.write(toFile: filePath, atomically: true, encoding: .utf8)
+                } else {
+                    filePath = PublishService.saveTempMarkdown(
+                        content: content,
+                        title: title
+                    )
+                }
 
                 let credentials = PublishService.Credentials(
                     wechatAppId: state.wechatAppId,
@@ -297,21 +626,48 @@ struct ContentView: View {
                     }
                 )
 
-                state.publishProgress = .done
-                state.publishLog.append(result)
+                // 提取 media_id
+                var mediaId = ""
+                if let data = result.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let mid = json["media_id"] as? String {
+                    mediaId = mid
+                }
+
+                state.updateStep(.publishing, status: .completed("已发布"))
+                state.workflowState = .done(mediaId)
+
             } catch {
-                state.publishProgress = .failed
-                state.publishLog.append("错误: \(error.localizedDescription)")
+                state.updateStep(.publishing, status: .failed(error.localizedDescription))
+                state.workflowState = .failed(error.localizedDescription)
                 publishError = error.localizedDescription
             }
-
-            if state.publishProgress == .done {
-                try? await Task.sleep(for: .seconds(2))
-            }
-            state.isPublishing = false
-            state.publishProgress = .idle
         }
     }
+
+    private func cancelReview() {
+        // 恢复原始内容
+        state.content = state.originalContent
+        state.resetWorkflow()
+    }
+
+    private func resetAll() {
+        state.content = ""
+        state.title = ""
+        state.summary = ""
+        state.author = ""
+        droppedFileURL = nil
+        showOriginalContent = false
+        state.resetWorkflow()
+    }
+
+    private func formattedDate() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date())
+    }
+
+    // MARK: - Load Credentials
 
     private func loadCredentials() {
         let defaults = UserDefaults.standard
@@ -322,6 +678,111 @@ struct ContentView: View {
         state.imageApiKey = defaults.string(forKey: "imageApiKey") ?? ""
         state.imageModel = defaults.string(forKey: "imageModel") ?? ""
         state.defaultAuthor = defaults.string(forKey: "defaultAuthor") ?? ""
+
+        if let role = defaults.string(forKey: "creatorRole"),
+           let r = CreatorRole(rawValue: role) {
+            state.creatorRole = r
+        }
+        if let style = defaults.string(forKey: "writingStyle"),
+           let s = WritingStyle(rawValue: style) {
+            state.writingStyle = s
+        }
+        if let audience = defaults.string(forKey: "targetAudience"),
+           let a = TargetAudience(rawValue: audience) {
+            state.targetAudience = a
+        }
+    }
+}
+
+// MARK: - Workflow Step Row
+
+struct WorkflowStepRow: View {
+    let step: WorkflowStep
+    let status: StepStatus
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // 状态图标
+            statusIcon
+                .frame(width: 16, height: 16)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(step.label)
+                    .font(.caption)
+                    .foregroundStyle(textColor)
+
+                // 状态详情
+                switch status {
+                case .completed(let detail):
+                    if !detail.isEmpty {
+                        Text(detail)
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                            .lineLimit(1)
+                    }
+                case .failed(let msg):
+                    Text(msg)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                case .skipped(let reason):
+                    Text(reason)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                default:
+                    EmptyView()
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .background(backgroundColor, in: RoundedRectangle(cornerRadius: 4))
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch status {
+        case .pending:
+            Image(systemName: "circle")
+                .font(.caption2)
+                .foregroundStyle(.quaternary)
+        case .running:
+            ProgressView()
+                .controlSize(.mini)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .skipped:
+            Image(systemName: "minus.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    private var textColor: Color {
+        switch status {
+        case .pending: .secondary
+        case .running: .primary
+        case .completed: .primary
+        case .skipped: .gray
+        case .failed: .red
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch status {
+        case .running: .blue.opacity(0.05)
+        case .failed: .red.opacity(0.05)
+        default: .clear
+        }
     }
 }
 
