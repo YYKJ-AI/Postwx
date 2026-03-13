@@ -55,18 +55,18 @@ struct GlobalAISettingsView: View {
                         .foregroundStyle(.tertiary)
 
                     // AI 配图
-                    SettingsCard(title: "AI 配图", icon: "photo.artframe", color: .purple) {
+                    SCard(title: "AI 配图", icon: "photo.artframe", color: .purple) {
                         VStack(spacing: 10) {
-                            SettingsTextField("API Base URL", text: $imageApiBase, placeholder: "https://api.tu-zi.com")
-                            SettingsSecureField("API Key", text: $imageApiKey)
-                            SettingsTextField("模型", text: $imageModel, placeholder: "gpt-image-1")
+                            STextField("API Base URL", text: $imageApiBase, placeholder: "https://api.tu-zi.com")
+                            SSecureField("API Key", text: $imageApiKey)
+                            STextField("模型", text: $imageModel, placeholder: "gpt-image-1")
                         }
 
                         Text("兼容 OpenAI Images API 格式的服务均可使用")
                             .font(.system(size: 10))
                             .foregroundStyle(.tertiary)
 
-                        SettingsTestButton(
+                        STestButton(
                             state: imageTestState,
                             label: "测试生图",
                             disabled: imageApiKey.isEmpty
@@ -76,7 +76,7 @@ struct GlobalAISettingsView: View {
                     }
 
                     // AI 润色
-                    SettingsCard(title: "AI 润色", icon: "wand.and.stars", color: .indigo) {
+                    SCard(title: "AI 润色", icon: "wand.and.stars", color: .indigo) {
                         HStack(spacing: 8) {
                             Circle()
                                 .fill(AIService.isAvailable() ? .green : .orange)
@@ -94,7 +94,7 @@ struct GlobalAISettingsView: View {
                                 .font(.system(size: 10))
                                 .foregroundStyle(.tertiary)
 
-                            SettingsTestButton(
+                            STestButton(
                                 state: claudeTestState,
                                 label: "测试 AI",
                                 disabled: false
