@@ -171,24 +171,49 @@ struct PublishService {
         process.standardOutput = pipe
         process.standardError = errPipe
 
-        try process.run()
+        // 使用 withCheckedThrowingContinuation 避免阻塞协作线程池，
+        // 并发读取 stdout/stderr 防止管道缓冲区满导致死锁
+        return try await withCheckedThrowingContinuation { continuation in
+            let outputBox = UnsafeSendableBox<Data>()
+            let errorBox = UnsafeSendableBox<Data>()
+            let group = DispatchGroup()
 
-        let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            group.enter()
+            DispatchQueue.global().async {
+                outputBox.value = pipe.fileHandleForReading.readDataToEndOfFile()
+                group.leave()
+            }
 
-        process.waitUntilExit()
+            group.enter()
+            DispatchQueue.global().async {
+                errorBox.value = errPipe.fileHandleForReading.readDataToEndOfFile()
+                group.leave()
+            }
 
-        let output = String(data: outputData, encoding: .utf8) ?? ""
-        let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
+            process.terminationHandler = { proc in
+                group.wait()
 
-        if !output.isEmpty { onLog(output) }
-        if !errorOutput.isEmpty { onLog(errorOutput) }
+                let output = String(data: outputBox.value, encoding: .utf8) ?? ""
+                let errorOutput = String(data: errorBox.value, encoding: .utf8) ?? ""
 
-        if process.terminationStatus != 0 {
-            throw PublishError.scriptFailed(errorOutput.isEmpty ? output : errorOutput)
+                if !output.isEmpty { onLog(output) }
+                if !errorOutput.isEmpty { onLog(errorOutput) }
+
+                if proc.terminationStatus != 0 {
+                    continuation.resume(throwing: PublishError.scriptFailed(
+                        errorOutput.isEmpty ? output : errorOutput
+                    ))
+                } else {
+                    continuation.resume(returning: output)
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
         }
-
-        return output
     }
 
     // MARK: - 测试微信凭证
@@ -326,6 +351,16 @@ struct PublishService {
         let slug = words.joined(separator: "-")
         return slug.isEmpty ? "untitled" : slug
     }
+}
+
+/// 线程安全的可变值容器，用于跨 DispatchQueue 传递数据
+private final class UnsafeSendableBox<T>: @unchecked Sendable {
+    var value: T
+    init(_ value: T) { self.value = value }
+}
+
+extension UnsafeSendableBox where T == Data {
+    convenience init() { self.init(Data()) }
 }
 
 enum TestError: LocalizedError {

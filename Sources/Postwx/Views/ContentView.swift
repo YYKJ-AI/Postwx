@@ -1047,6 +1047,10 @@ struct ContentView: View {
         let title = state.title
         let summary = state.summary
         let format = state.inputFormat
+        let theme = state.selectedTheme
+        let color = state.selectedColor
+        let profileIds = state.selectedProfileIds
+        let profiles = profileManager.profiles
         let d = UserDefaults.standard
         let globalImageApiBase = d.string(forKey: "imageApiBase") ?? ""
         let globalImageApiKey = d.string(forKey: "imageApiKey") ?? ""
@@ -1072,8 +1076,8 @@ struct ContentView: View {
             var failCount = 0
             var lastMediaId = ""
 
-            for profileId in state.selectedProfileIds {
-                guard let profile = profileManager.profiles.first(where: { $0.id == profileId }) else {
+            for profileId in profileIds {
+                guard let profile = profiles.first(where: { $0.id == profileId }) else {
                     state.profilePublishStatuses[profileId] = .failed("账号不存在")
                     failCount += 1
                     continue
@@ -1101,8 +1105,8 @@ struct ContentView: View {
 
                     let result = try await PublishService.publish(
                         filePath: filePath,
-                        theme: state.selectedTheme,
-                        color: state.selectedColor,
+                        theme: theme,
+                        color: color,
                         title: title.isEmpty ? nil : title,
                         summary: summary.isEmpty ? nil : summary,
                         author: author.isEmpty ? nil : author,
