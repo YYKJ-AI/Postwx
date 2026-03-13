@@ -143,35 +143,22 @@ struct SettingsView: View {
             Divider().opacity(0.3)
 
             // 新建 / 删除
-            HStack(spacing: 4) {
-                Button {
+            HStack(spacing: 2) {
+                SidebarToolbarButton(icon: "plus", help: "新建账号") {
                     newProfileName = ""
                     showNewProfileSheet = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .medium))
-                        .frame(width: 24, height: 24)
                 }
-                .buttonStyle(.plain)
-                .help("新建账号")
 
-                Button {
+                SidebarToolbarButton(icon: "minus", help: "删除当前账号", disabled: pm.profiles.count <= 1) {
                     if pm.profiles.count > 1 {
                         profileToDelete = editingProfile
                     }
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.system(size: 11, weight: .medium))
-                        .frame(width: 24, height: 24)
                 }
-                .buttonStyle(.plain)
-                .disabled(pm.profiles.count <= 1)
-                .help("删除当前账号")
 
                 Spacer()
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
         }
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
@@ -647,6 +634,40 @@ struct SPickerField<Content: View>: View {
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity)
         }
+    }
+}
+
+struct SidebarToolbarButton: View {
+    let icon: String
+    let help: String
+    var disabled: Bool = false
+    let action: () -> Void
+    @State private var isHovered = false
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(disabled ? Color.secondary.opacity(0.3) : isPressed ? Color.primary : isHovered ? Color.primary.opacity(0.85) : Color.secondary)
+                .frame(width: 32, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isPressed ? Color.primary.opacity(0.12) : isHovered ? Color.primary.opacity(0.06) : Color.clear)
+                )
+                .scaleEffect(isPressed ? 0.92 : 1.0)
+                .animation(.easeOut(duration: 0.12), value: isPressed)
+                .animation(.easeOut(duration: 0.15), value: isHovered)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .onHover { isHovered = disabled ? false : $0 }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in if !disabled { isPressed = true } }
+                .onEnded { _ in isPressed = false }
+        )
+        .help(help)
     }
 }
 

@@ -320,8 +320,6 @@ struct ContentView: View {
                     if !state.isProcessing {
                         // 目标账号选择
                         accountSelector
-
-                        metadataFields
                     }
 
                     workflowTimeline
