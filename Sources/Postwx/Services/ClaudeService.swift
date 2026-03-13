@@ -268,7 +268,7 @@ struct AIService {
         1. 保持原文核心信息和结构不变
         2. 根据人设调整专业深度、语气措辞和表达方式
         3. 保留所有 Markdown 格式标记（标题、列表、代码块、链接等）
-        4. 保留所有图片标记（包括 __generate: 占位符）
+        4. 保留所有图片标记（包括 generate:// 占位符）
         5. 去除 YAML frontmatter（即文章开头 --- ... --- 包裹的元数据块，如 tags、created、date 等），输出中不要包含 frontmatter
         6. 只输出适配后的全文，不要任何解释或前言
         """
@@ -339,7 +339,7 @@ struct AIService {
 
         ## 规则
         1. 保留所有 Markdown 格式标记
-        2. 保留所有图片标记（包括 __generate: 占位符）
+        2. 保留所有图片标记（包括 generate:// 占位符）
         3. 去除 YAML frontmatter（即文章开头 --- ... --- 包裹的元数据块），输出中不要包含 frontmatter
         4. 先输出完整润色后全文，最后一行输出 <!--SCORE:...--> 评分
         """

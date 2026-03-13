@@ -106,7 +106,7 @@ struct PublishService {
             for img in images {
                 if img.position == "after_paragraph_\(paragraphNumber)" {
                     result.append("")
-                    result.append("![\(img.alt)](__generate:\(img.prompt)__)")
+                    result.append("![\(img.alt)](generate://\(img.prompt))")
                     result.append("")
                 }
             }

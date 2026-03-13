@@ -167,14 +167,14 @@ async function processGeneratedImages(
   accessToken: string,
 ): Promise<string> {
   const imageGenConfig = loadImageGenConfig();
-  const genRegex = /<img[^>]*\ssrc=["']__generate:([^"']+)__["'][^>]*>/gi;
+  const genRegex = /<img[^>]*\ssrc=["']generate:\/\/([^"']+)["'][^>]*>/gi;
   const matches = [...html.matchAll(genRegex)];
 
   if (matches.length === 0) return html;
 
   if (!imageGenConfig) {
     console.error(
-      "[wechat-api] WARNING: Found __generate: image placeholders but IMAGE_API_KEY not configured. Skipping generation.",
+      "[wechat-api] WARNING: Found generate:// image placeholders but IMAGE_API_KEY not configured. Skipping generation.",
     );
     return html;
   }
@@ -226,7 +226,7 @@ async function processGeneratedImages(
       }
 
       const newTag = fullTag.replace(
-        /\ssrc=["']__generate:[^"']+__["']/,
+        /\ssrc=["']generate:\/\/[^"']+["']/,
         ` src="${cdnUrl}"`,
       );
       updatedHtml = updatedHtml.replace(fullTag, newTag);
@@ -239,6 +239,8 @@ async function processGeneratedImages(
         `[wechat-api] Failed to generate image for "${prompt.slice(0, 50)}...":`,
         err,
       );
+      // 移除失败的占位符标签，防止泄漏到 uploadImagesInHtml 被当作文件路径处理
+      updatedHtml = updatedHtml.replace(fullTag, "");
     }
   }
 
@@ -457,6 +459,12 @@ async function uploadImagesInHtml(
       if (!firstMediaId) {
         firstMediaId = src;
       }
+      continue;
+    }
+
+    // 跳过未被 processGeneratedImages 处理的 generate:// 占位符
+    if (src.startsWith("generate://")) {
+      console.error(`[wechat-api] Skipping unprocessed generate placeholder: ${src.slice(0, 60)}...`);
       continue;
     }
 
@@ -802,17 +810,17 @@ async function main(): Promise<void> {
         frontmatter.description ||
         "";
 
-    // 预处理: 将 ![alt](__generate:prompt__) 转为 HTML img 标签，防止 __ 被渲染为粗体
-    const generateImgRegex = /!\[([^\]]*)\]\(__generate:(.+?)__\)/g;
+    // 预处理: 将 ![alt](generate://prompt) 转为 HTML img 标签，
+    // 因为 prompt 含空格不是合法 URL，markdown 渲染器不会将其转为 <img>
+    const generateImgRegex = /!\[([^\]]*)\]\(generate:\/\/(.+?)\)/g;
     let renderFilePath = filePath;
     if (generateImgRegex.test(body)) {
       const preprocessed = body.replace(
-        /!\[([^\]]*)\]\(__generate:(.+?)__\)/g,
-        '<img src="__generate:$2__" alt="$1">',
+        /!\[([^\]]*)\]\(generate:\/\/(.+?)\)/g,
+        '<img src="generate://$2" alt="$1">',
       );
       const tmpDir = os.tmpdir();
       const tmpFile = path.join(tmpDir, `postwx-${Date.now()}.md`);
-      // 保留 frontmatter + 替换后的 body
       const originalContent = fs.readFileSync(filePath, "utf-8");
       const fmMatch = originalContent.match(/^(---\r?\n[\s\S]*?\r?\n---\r?\n)/);
       const fmPart = fmMatch ? fmMatch[1] : "";
@@ -875,7 +883,7 @@ async function main(): Promise<void> {
   console.error("[wechat-api] Fetching access token...");
   const accessToken = await fetchAccessToken(config.appId, config.appSecret);
 
-  // 先处理 AI 生成图片占位符（__generate:prompt__）
+  // 先处理 AI 生成图片占位符（generate://prompt）
   console.error("[wechat-api] Processing generated images...");
   htmlContent = await processGeneratedImages(htmlContent, accessToken);
 
@@ -902,18 +910,17 @@ async function main(): Promise<void> {
 
   if (
     coverPath &&
-    coverPath.startsWith("__generate:") &&
-    coverPath.endsWith("__")
+    coverPath.startsWith("generate://")
   ) {
     // AI 生成封面图
     const imageGenConfig = loadImageGenConfig();
     if (!imageGenConfig) {
       console.error(
-        "Error: --cover uses __generate: but IMAGE_API_KEY not configured.",
+        "Error: --cover uses generate:// but IMAGE_API_KEY not configured.",
       );
       process.exit(1);
     }
-    const prompt = coverPath.slice("__generate:".length, -2);
+    const prompt = coverPath.slice("generate://".length);
     console.error(
       `[wechat-api] Generating cover image: ${prompt.slice(0, 80)}...`,
     );
